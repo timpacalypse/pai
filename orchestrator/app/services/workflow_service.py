@@ -11,6 +11,8 @@ class WorkflowType(str, Enum):
     retrieval_augmented = "retrieval_augmented"
     agent_research = "agent_research"
     agent_planning = "agent_planning"
+    agent_analysis = "agent_analysis"
+    multi_agent_competition = "multi_agent_competition"
     execution = "execution"
 
 
@@ -19,7 +21,7 @@ _INTENT_WORKFLOW_MAP: dict[IntentType, WorkflowType] = {
     IntentType.question: WorkflowType.direct_response,
     IntentType.conversation: WorkflowType.direct_response,
     IntentType.creative: WorkflowType.direct_response,
-    IntentType.analysis: WorkflowType.retrieval_augmented,
+    IntentType.analysis: WorkflowType.agent_analysis,
     IntentType.research: WorkflowType.agent_research,
     IntentType.planning: WorkflowType.agent_planning,
     IntentType.execution: WorkflowType.execution,

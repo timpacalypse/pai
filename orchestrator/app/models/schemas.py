@@ -68,6 +68,11 @@ class TaskRequest(BaseModel):
     request_id: UUID = Field(default_factory=uuid4)
 
 
+class CompetitionRequest(TaskRequest):
+    agents: list[str] = Field(default=["research", "analysis"], min_length=2)
+    strategy: str = "best_score"  # best_score | weighted | synthesize
+
+
 class OrchestratorDecision(BaseModel):
     request_id: UUID
     roles: ResolvedRoles

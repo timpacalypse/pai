@@ -1,8 +1,8 @@
 import logging
 from fastapi import APIRouter, Request
 
-from app.models.schemas import TaskRequest, TaskResponse, RoleType, DomainType, ROLE_DOMAIN_MAP
-from app.core.orchestrator import handle_task
+from app.models.schemas import TaskRequest, TaskResponse, CompetitionRequest, RoleType, DomainType, ROLE_DOMAIN_MAP
+from app.core.orchestrator import handle_task, handle_competition
 from app.memory.episodic import log_episodic
 from app.services.role_service import get_all_roles
 
@@ -21,6 +21,19 @@ async def create_task(task: TaskRequest, request: Request) -> TaskResponse:
 
     # Persist to episodic memory (non-blocking best-effort)
     await log_episodic(task, response)
+
+    return response
+
+
+@router.post("/compete", response_model=TaskResponse)
+async def compete_task(comp: CompetitionRequest, request: Request) -> TaskResponse:
+    """Run multi-agent competition on a task with explicit agent and strategy selection."""
+    response = await handle_competition(
+        request=comp,
+        http_client=request.app.state.http_client,
+    )
+
+    await log_episodic(comp, response)
 
     return response
 

@@ -198,7 +198,7 @@ def test_workflow_agent_research(client):
 def test_workflow_retrieval_augmented(client):
     resp = client.post("/task", json={"input": "Analyze the impact of executive order 14028"})
     assert resp.status_code == 200
-    assert resp.json()["workflow"] == "retrieval_augmented"
+    assert resp.json()["workflow"] == "agent_analysis"
 
 
 # ── GET /roles ──
@@ -226,3 +226,75 @@ def test_get_roles_structure(client):
     assert "goals" in role_entry
     assert "preferences" in role_entry
     assert "constraints" in role_entry
+
+
+# ── Sprint 3: Agent Workflows ──
+
+def test_analysis_agent_workflow(client):
+    resp = client.post("/task", json={
+        "input": "Analyze the pros and cons of zero trust vs perimeter security",
+        "role": "cybersecurity_executive",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workflow"] == "agent_analysis"
+    assert data["content"]
+
+
+def test_planning_agent_workflow(client):
+    resp = client.post("/task", json={
+        "input": "Plan a roadmap for implementing NIST CSF",
+        "role": "solutions_architect",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workflow"] == "agent_planning"
+    assert data["content"]
+
+
+# ── Sprint 3: Multi-Agent Competition ──
+
+def test_compete_endpoint_basic(client):
+    resp = client.post("/compete", json={
+        "input": "What are the key trends in AI governance?",
+        "role": "ai_governance_practitioner",
+        "agents": ["research", "analysis"],
+        "strategy": "best_score",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workflow"] == "multi_agent_competition"
+    assert data["content"]
+    assert data["role"] == "ai_governance_practitioner"
+
+
+def test_compete_synthesize_strategy(client):
+    resp = client.post("/compete", json={
+        "input": "Evaluate the state of ATO automation",
+        "role": "ai_cybersecurity_strategist",
+        "agents": ["research", "analysis"],
+        "strategy": "synthesize",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workflow"] == "multi_agent_competition"
+    assert data["content"]
+
+
+def test_compete_validation_too_few_agents(client):
+    resp = client.post("/compete", json={
+        "input": "test",
+        "agents": ["research"],
+    })
+    assert resp.status_code == 422
+
+
+def test_compete_invalid_strategy_fallback(client):
+    resp = client.post("/compete", json={
+        "input": "Test fallback strategy",
+        "agents": ["research", "analysis"],
+        "strategy": "not_a_strategy",
+    })
+    assert resp.status_code == 200
+    # Should fallback to best_score and still work
+    assert resp.json()["content"]
