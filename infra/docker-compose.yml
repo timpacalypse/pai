@@ -1,0 +1,72 @@
+services:
+
+  # ── Orchestrator (FastAPI control plane) ──
+  orchestrator:
+    build:
+      context: ../orchestrator
+      dockerfile: Dockerfile
+    container_name: pai-orchestrator
+    ports:
+      - "${ORCHESTRATOR_PORT:-8000}:8000"
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../orchestrator/app:/app/app
+    networks:
+      - pai-net
+    restart: unless-stopped
+
+  # ── PostgreSQL + pgvector (Memory System) ──
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pai-postgres
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pai_dev_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-pai}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    networks:
+      - pai-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pai} -d ${POSTGRES_DB:-pai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Caching / State / Pub-Sub) ──
+  redis:
+    image: redis:7-alpine
+    container_name: pai-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - pai-net
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  pai-net:
+    driver: bridge
