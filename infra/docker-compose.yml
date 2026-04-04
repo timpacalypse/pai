@@ -63,6 +63,20 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Frontend (Web UI) ──
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: pai-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - orchestrator
+    networks:
+      - pai-net
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

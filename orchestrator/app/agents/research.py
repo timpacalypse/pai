@@ -36,12 +36,14 @@ class ResearchAgent(BaseAgent):
             "- Clearly distinguish facts from analysis.\n"
             "- Respond with valid JSON matching this schema:\n"
             "  {\n"
-            '    "answer": "<structured research findings>",\n'
+            '    "answer": "<PLAIN TEXT string with your complete research findings written in readable paragraphs>",\n'
             '    "key_findings": ["<finding 1>", "<finding 2>", ...],\n'
             '    "reasoning": "<research methodology and approach>",\n'
             '    "confidence": <0.0-1.0>,\n'
             '    "gaps": ["<area needing further research>", ...]\n'
             "  }\n"
+            "- IMPORTANT: The 'answer' field MUST be a single plain text string (not a dict or list).\n"
+            "  Write it as a readable, well-structured response with full sentences.\n"
             "- Do not include any text outside the JSON object.\n"
         )
 

@@ -8,3 +8,6 @@ psycopg2-binary==2.9.10
 redis[hiredis]==5.2.1
 httpx==0.28.1
 pgvector==0.3.6
+duckduckgo-search==7.5.1
+beautifulsoup4==4.13.3
+trafilatura==2.0.0

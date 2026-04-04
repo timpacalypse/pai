@@ -36,7 +36,7 @@ class AnalysisAgent(BaseAgent):
             "- Provide actionable recommendations.\n"
             "- Respond with valid JSON matching this schema:\n"
             "  {\n"
-            '    "answer": "<structured analysis>",\n'
+            '    "answer": "<PLAIN TEXT string with your complete analysis written in readable paragraphs>",\n'
             '    "dimensions": ["<dimension 1>", "<dimension 2>", ...],\n'
             '    "pros": ["<pro 1>", ...],\n'
             '    "cons": ["<con 1>", ...],\n'
@@ -44,6 +44,8 @@ class AnalysisAgent(BaseAgent):
             '    "reasoning": "<analytical methodology>",\n'
             '    "confidence": <0.0-1.0>\n'
             "  }\n"
+            "- IMPORTANT: The 'answer' field MUST be a single plain text string (not a dict or list).\n"
+            "  Write it as a readable, well-structured response with full sentences.\n"
             "- Do not include any text outside the JSON object.\n"
         )
 

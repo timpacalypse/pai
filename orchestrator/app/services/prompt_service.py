@@ -47,3 +47,29 @@ def build_system_prompt(roles: ResolvedRoles) -> str:
     ])
 
     return "\n".join(sections)
+
+
+def build_chat_prompt(roles: ResolvedRoles) -> str:
+    """Build a conversational system prompt — plain language, no JSON."""
+    sections = [
+        "You are PAI — a Personal AI assistant having a conversation.",
+        "",
+        _role_block("Primary Role", roles.primary),
+    ]
+
+    if roles.secondary:
+        sections.append("")
+        sections.append(_role_block("Secondary Role", roles.secondary))
+
+    sections.extend([
+        "",
+        "Rules:",
+        "- Respond in natural, conversational language. Do NOT output JSON.",
+        "- Be helpful, concise, and direct.",
+        "- If you do not know the answer, say so honestly. Never invent facts, URLs, recipes, or data.",
+        "- If context is provided, use only what is relevant. Ignore context that does not relate to the question.",
+        "- If the user asks about a specific source (website, book, etc.) and you don't have that information, say you don't have access to it rather than guessing.",
+        "- Adapt your tone and depth to the active role(s).",
+    ])
+
+    return "\n".join(sections)

@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS episodic_memory (
 CREATE TABLE IF NOT EXISTS semantic_memory (
     id SERIAL PRIMARY KEY,
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(768),
     source VARCHAR(255),
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -147,3 +147,173 @@ CREATE INDEX IF NOT EXISTS idx_episodic_memory_session
 
 CREATE INDEX IF NOT EXISTS idx_episodic_memory_role
     ON episodic_memory (role);
+
+-- Article ledger: deduplication for scheduled research
+CREATE TABLE IF NOT EXISTS article_ledger (
+    id SERIAL PRIMARY KEY,
+    url_hash VARCHAR(64) NOT NULL UNIQUE,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    source VARCHAR(255) DEFAULT '',
+    topic VARCHAR(255) DEFAULT '',
+    score FLOAT DEFAULT 0.0,
+    discovered_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_ledger_url_hash
+    ON article_ledger (url_hash);
+
+CREATE INDEX IF NOT EXISTS idx_article_ledger_discovered
+    ON article_ledger (discovered_at DESC);
+
+-- ── Meal Planning Skill ──
+
+-- Family members for meal preference tracking
+CREATE TABLE IF NOT EXISTS family_members (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    age_group VARCHAR(20) DEFAULT 'adult',  -- toddler, child, teen, adult
+    dietary_restrictions TEXT[] DEFAULT '{}',
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Ingredient and food preferences per family member
+CREATE TABLE IF NOT EXISTS meal_preferences (
+    id SERIAL PRIMARY KEY,
+    family_member_id INTEGER NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+    item VARCHAR(255) NOT NULL,           -- ingredient, dish, or cuisine name
+    item_type VARCHAR(50) DEFAULT 'dish', -- dish, ingredient, cuisine, cooking_method
+    sentiment VARCHAR(10) NOT NULL,       -- love, like, neutral, dislike, hate, allergy
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(family_member_id, item, item_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meal_preferences_member
+    ON meal_preferences (family_member_id);
+
+-- Meal plans and history
+CREATE TABLE IF NOT EXISTS meal_plans (
+    id SERIAL PRIMARY KEY,
+    week_label VARCHAR(50) NOT NULL,      -- e.g. "2026-W14"
+    plan JSONB NOT NULL,                  -- structured plan: {monday: {dinner: {...}}, ...}
+    preferences_snapshot JSONB DEFAULT '{}', -- snapshot of prefs used to generate
+    model VARCHAR(50) DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Individual meal ratings (feedback)
+CREATE TABLE IF NOT EXISTS meal_ratings (
+    id SERIAL PRIMARY KEY,
+    meal_plan_id INTEGER REFERENCES meal_plans(id) ON DELETE SET NULL,
+    meal_name VARCHAR(255) NOT NULL,
+    day_of_week VARCHAR(10) DEFAULT '',
+    family_member_id INTEGER REFERENCES family_members(id) ON DELETE SET NULL,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    would_repeat BOOLEAN DEFAULT TRUE,
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_meal_ratings_plan
+    ON meal_ratings (meal_plan_id);
+
+CREATE INDEX IF NOT EXISTS idx_meal_ratings_member
+    ON meal_ratings (family_member_id);
+
+-- ── Home Knowledge Base ────────────────────────────────────────
+
+-- Home items: appliances, systems, areas
+CREATE TABLE IF NOT EXISTS home_items (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(100) DEFAULT 'general', -- appliance, hvac, plumbing, electrical, outdoor, vehicle, general
+    location VARCHAR(255) DEFAULT '',         -- kitchen, garage, whole house, etc.
+    brand VARCHAR(255) DEFAULT '',
+    model_info VARCHAR(255) DEFAULT '',
+    purchase_date DATE,
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_items_category
+    ON home_items (category);
+
+-- Recurring maintenance tasks
+CREATE TABLE IF NOT EXISTS home_tasks (
+    id SERIAL PRIMARY KEY,
+    home_item_id INTEGER REFERENCES home_items(id) ON DELETE CASCADE,
+    description TEXT NOT NULL,             -- "replace air filter"
+    recurrence_days INTEGER DEFAULT 0,     -- 0 = one-time, 90 = every 3 months
+    last_completed_at TIMESTAMP WITH TIME ZONE,
+    next_due_at TIMESTAMP WITH TIME ZONE,
+    alert_days_before INTEGER DEFAULT 7,   -- send alert this many days before due
+    priority VARCHAR(20) DEFAULT 'normal', -- low, normal, high, critical
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_tasks_next_due
+    ON home_tasks (next_due_at);
+
+CREATE INDEX IF NOT EXISTS idx_home_tasks_item
+    ON home_tasks (home_item_id);
+
+-- Task completion log
+CREATE TABLE IF NOT EXISTS home_task_log (
+    id SERIAL PRIMARY KEY,
+    home_task_id INTEGER NOT NULL REFERENCES home_tasks(id) ON DELETE CASCADE,
+    completed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    notes TEXT DEFAULT '',
+    cost NUMERIC(10, 2) DEFAULT 0
+);
+
+-- Home documents: manuals, warranties, reference info
+CREATE TABLE IF NOT EXISTS home_documents (
+    id SERIAL PRIMARY KEY,
+    home_item_id INTEGER REFERENCES home_items(id) ON DELETE SET NULL,
+    title VARCHAR(500) NOT NULL,
+    doc_type VARCHAR(50) DEFAULT 'manual', -- manual, warranty, receipt, notes, reference
+    content TEXT NOT NULL,                 -- full text content
+    source VARCHAR(500) DEFAULT '',        -- URL or file name
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_home_docs_item
+    ON home_documents (home_item_id);
+
+CREATE INDEX IF NOT EXISTS idx_home_docs_type
+    ON home_documents (doc_type);
+
+-- Quality Metrics: persistent score storage for agent outputs
+CREATE TABLE IF NOT EXISTS quality_metrics (
+    id SERIAL PRIMARY KEY,
+    request_id UUID NOT NULL,
+    intent VARCHAR(50) NOT NULL,
+    workflow VARCHAR(50) NOT NULL,
+    agent_name VARCHAR(50) NOT NULL,
+    model VARCHAR(50) DEFAULT '',
+    accuracy FLOAT DEFAULT 0,
+    relevance FLOAT DEFAULT 0,
+    depth FLOAT DEFAULT 0,
+    clarity FLOAT DEFAULT 0,
+    actionability FLOAT DEFAULT 0,
+    consistency FLOAT DEFAULT 0,
+    total FLOAT DEFAULT 0,
+    was_selected BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_agent
+    ON quality_metrics (agent_name);
+
+CREATE INDEX IF NOT EXISTS idx_quality_intent
+    ON quality_metrics (intent);
+
+CREATE INDEX IF NOT EXISTS idx_quality_created
+    ON quality_metrics (created_at);

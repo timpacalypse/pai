@@ -1,7 +1,10 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 import sys
+
+import asyncio
 
 import httpx
 import redis.asyncio as aioredis
@@ -10,6 +13,9 @@ from app.core.config import settings
 from app.core.middleware import RequestLoggingMiddleware
 from app.api.routes import router
 from app.services.role_service import load_roles
+from app.services.scheduler import scheduler_loop
+from app.services.meal_scheduler import meal_scheduler_loop
+from app.services.home_alert_scheduler import home_alert_scheduler_loop
 
 # ── Structured logging ──
 logging.basicConfig(
@@ -25,8 +31,26 @@ async def lifespan(app: FastAPI):
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     app.state.http_client = httpx.AsyncClient(timeout=120.0)
     await load_roles()
+
+    # Start background schedulers
+    scheduler_task = asyncio.create_task(scheduler_loop())
+    app.state.scheduler_task = scheduler_task
+
+    meal_task = asyncio.create_task(meal_scheduler_loop())
+    app.state.meal_scheduler_task = meal_task
+
+    home_alert_task = asyncio.create_task(home_alert_scheduler_loop())
+    app.state.home_alert_task = home_alert_task
+
     yield
+
     # Shutdown
+    for task in (scheduler_task, meal_task, home_alert_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await app.state.redis.aclose()
     await app.state.http_client.aclose()
 
@@ -39,6 +63,12 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://pai-frontend:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(router)
 
 

@@ -28,12 +28,14 @@ class SynthesizerAgent(BaseAgent):
             "- Note which sources contributed to each finding.\n"
             "- Respond with valid JSON matching this schema:\n"
             "  {\n"
-            '    "answer": "<synthesized response>",\n'
+            '    "answer": "<PLAIN TEXT string with your complete synthesized response written in readable paragraphs>",\n'
             '    "sources_used": ["<agent_name 1>", ...],\n'
             '    "conflicts_resolved": ["<conflict>", ...],\n'
             '    "reasoning": "<synthesis approach>",\n'
             '    "confidence": <0.0-1.0>\n'
             "  }\n"
+            "- IMPORTANT: The 'answer' field MUST be a single plain text string (not a dict or list).\n"
+            "  Write it as a readable, well-structured response with full sentences.\n"
             "- Do not include any text outside the JSON object.\n"
         )
 

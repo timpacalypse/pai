@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAI — Personal AI</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h1>PAI</h1>
+                <span class="subtitle">Personal AI Orchestrator</span>
+            </div>
+
+            <div class="sidebar-section">
+                <label for="role-select">Primary Role</label>
+                <select id="role-select">
+                    <option value="">Auto (inferred from prompt)</option>
+                </select>
+            </div>
+
+            <div class="sidebar-section">
+                <label for="secondary-select">Secondary Role</label>
+                <select id="secondary-select">
+                    <option value="">Auto (inferred from prompt)</option>
+                </select>
+            </div>
+
+            <div class="sidebar-section">
+                <label>Mode</label>
+                <div class="mode-buttons">
+                    <button class="mode-btn active" data-mode="chat">Chat</button>
+                    <button class="mode-btn" data-mode="task">Task</button>
+                    <button class="mode-btn" data-mode="research">Research</button>
+                    <button class="mode-btn" data-mode="compete">Compete</button>
+                    <button class="mode-btn" data-mode="meals">Meals</button>
+                    <button class="mode-btn" data-mode="home">Home</button>
+                </div>
+            </div>
+
+            <div id="research-options" class="sidebar-section hidden">
+                <label for="time-filter">Time Range</label>
+                <select id="time-filter">
+                    <option value="d">Past Day</option>
+                    <option value="w">Past Week</option>
+                    <option value="m" selected>Past Month</option>
+                    <option value="y">Past Year</option>
+                </select>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="auto-ingest" checked> Auto-ingest to memory
+                </label>
+            </div>
+
+            <div id="compete-options" class="sidebar-section hidden">
+                <label>Agents</label>
+                <div class="agent-checkboxes">
+                    <label class="checkbox-label"><input type="checkbox" value="research" checked> Research</label>
+                    <label class="checkbox-label"><input type="checkbox" value="analysis" checked> Analysis</label>
+                    <label class="checkbox-label"><input type="checkbox" value="planning"> Planning</label>
+                    <label class="checkbox-label"><input type="checkbox" value="critic"> Critic</label>
+                </div>
+                <label for="strategy-select">Strategy</label>
+                <select id="strategy-select">
+                    <option value="best_score">Best Score</option>
+                    <option value="weighted">Weighted</option>
+                    <option value="synthesize">Synthesize</option>
+                </select>
+            </div>
+
+            <div id="meals-options" class="sidebar-section hidden">
+                <button id="load-family-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Load Family &amp; Prefs</button>
+                <button id="gen-plan-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Generate Meal Plan</button>
+                <button id="view-plans-btn" class="secondary-btn" style="width:100%">View Past Plans</button>
+            </div>
+
+            <div id="home-options" class="sidebar-section hidden">
+                <button id="home-items-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">View Items &amp; Tasks</button>
+                <button id="home-alerts-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Check Alerts</button>
+                <button id="home-docs-btn" class="secondary-btn" style="width:100%">Search Documents</button>
+            </div>
+
+            <div class="sidebar-footer">
+                <button id="clear-btn" class="secondary-btn">Clear Chat</button>
+                <div id="health-indicator">
+                    <span class="health-dot"></span>
+                    <span id="health-text">Checking...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main id="main">
+            <div id="messages"></div>
+
+            <div id="input-area">
+                <textarea id="user-input" placeholder="Type a message..." rows="2"></textarea>
+                <button id="send-btn" title="Send">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

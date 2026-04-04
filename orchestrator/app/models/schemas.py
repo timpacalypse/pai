@@ -73,6 +73,59 @@ class CompetitionRequest(TaskRequest):
     strategy: str = "best_score"  # best_score | weighted | synthesize
 
 
+class WebResearchRequest(BaseModel):
+    topic: str = Field(..., min_length=1, max_length=500)
+    max_results: int = Field(default=10, ge=1, le=30)
+    time_filter: str = Field(default="m", pattern=r"^[dwmy]$")
+    auto_ingest: bool = True
+    min_score: float = Field(default=0.2, ge=0.0, le=1.0)
+    role: RoleType | None = None
+    request_id: UUID = Field(default_factory=uuid4)
+
+
+class RankedArticle(BaseModel):
+    title: str
+    url: str
+    snippet: str
+    body_preview: str = ""
+    source: str = ""
+    score: dict = {}
+
+
+class WebResearchResponse(BaseModel):
+    request_id: UUID
+    topic: str
+    articles: list[RankedArticle]
+    total_found: int
+    ingested_count: int = 0
+    duration_ms: float
+
+
+class ChatMessage(BaseModel):
+    role_name: str = Field(default="user")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=10000)
+    role: RoleType | None = None
+    secondary_role: RoleType | None = None
+    conversation_id: UUID = Field(default_factory=uuid4)
+    history: list[ChatMessage] = []
+    request_id: UUID = Field(default_factory=uuid4)
+
+
+class ChatResponse(BaseModel):
+    request_id: UUID
+    conversation_id: UUID
+    role: str
+    secondary_role: str | None = None
+    domain: str
+    content: str
+    intent: str = "conversation"
+    duration_ms: float
+
+
 class OrchestratorDecision(BaseModel):
     request_id: UUID
     roles: ResolvedRoles
@@ -92,3 +145,66 @@ class TaskResponse(BaseModel):
     intent: str = "question"
     duration_ms: float
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Meal Planning Schemas ───────────────────────────────────────
+
+
+class FamilyMemberRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    age_group: str = Field(default="adult", pattern=r"^(toddler|child|teen|adult)$")
+    dietary_restrictions: list[str] = []
+    notes: str = ""
+
+
+class PreferenceRequest(BaseModel):
+    family_member_id: int
+    item: str = Field(..., min_length=1, max_length=255)
+    item_type: str = Field(default="dish", pattern=r"^(dish|ingredient|cuisine|cooking_method)$")
+    sentiment: str = Field(..., pattern=r"^(love|like|neutral|dislike|hate|allergy)$")
+    notes: str = ""
+
+
+class MealRatingRequest(BaseModel):
+    meal_name: str = Field(..., min_length=1, max_length=255)
+    family_member_id: int
+    rating: int = Field(..., ge=1, le=5)
+    would_repeat: bool = True
+    meal_plan_id: int | None = None
+    day_of_week: str = ""
+    notes: str = ""
+
+
+class MealPlanRequest(BaseModel):
+    week_label: str | None = None
+    extra_instructions: str = ""
+
+
+# ── Home Knowledge Base Schemas ─────────────────────────────────
+
+
+class HomeTellRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+
+
+class HomeItemRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(default="general", pattern=r"^(appliance|hvac|plumbing|electrical|outdoor|vehicle|general)$")
+    location: str = ""
+    brand: str = ""
+    model_info: str = ""
+    notes: str = ""
+
+
+class HomeTaskCompleteRequest(BaseModel):
+    task_id: int
+    notes: str = ""
+    cost: float = 0.0
+
+
+class HomeDocumentRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(..., min_length=1)
+    doc_type: str = Field(default="manual", pattern=r"^(manual|warranty|receipt|notes|reference)$")
+    home_item_id: int | None = None
+    source: str = ""

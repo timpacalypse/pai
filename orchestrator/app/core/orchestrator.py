@@ -10,7 +10,8 @@ from app.services.role_service import resolve_roles
 from app.services.ollama_service import generate, select_model
 from app.services.prompt_service import build_system_prompt
 from app.services.intent_service import classify_intent
-from app.services.workflow_service import route_workflow, WorkflowType
+from app.services.workflow_service import route_workflow, WorkflowType, select_agents_for_task
+from app.services.role_inference import infer_roles
 from app.agents.base import AgentInput, AgentOutput
 from app.agents.research import ResearchAgent
 from app.agents.analysis import AnalysisAgent
@@ -20,6 +21,8 @@ from app.agents.synthesizer import SynthesizerAgent
 from app.evaluation.scorer import evaluate_output
 from app.evaluation.adjudicator import adjudicate, AdjudicationStrategy
 from app.memory.semantic import search_semantic
+from app.services.quality_service import store_scores
+from app.services.procedural_memory import record_outcome, lookup_proven_workflow
 
 logger = logging.getLogger("pai.orchestrator")
 
@@ -136,6 +139,29 @@ async def _run_competition(
         },
     )
 
+    # 3b. Persist quality scores
+    try:
+        intent = classify_intent(request.input)
+        model = select_model(request.input)
+        await store_scores(
+            request_id=request.request_id,
+            intent=intent.value,
+            workflow="multi_agent_competition",
+            model=model,
+            scores=[s.model_dump() for s in result.scores],
+            winner=result.winner,
+        )
+    except Exception as e:
+        logger.warning("quality_store_failed", extra={"error": str(e)})
+
+    # 3c. Record procedural memory
+    try:
+        intent_val = classify_intent(request.input).value
+        avg = sum(s.total for s in result.scores) / max(len(result.scores), 1)
+        await record_outcome(intent_val, "multi_agent_competition", agent_names, avg)
+    except Exception as e:
+        logger.warning("procedural_record_failed: %s", str(e))
+
     # 4. Optionally synthesize
     if result.should_synthesize and len(result.selected_outputs) > 1:
         synth_output = await _run_synthesis(
@@ -212,23 +238,55 @@ async def handle_task(
 ) -> TaskResponse:
     """
     Central orchestration pipeline:
-      Request → Intent → Role Resolution → Workflow Routing → Execution → Structured Output
+      Request → Auto-Infer Roles → Intent → Smart Agent Selection → Execution → Structured Output
     """
     start = time.perf_counter()
 
     # 1. Classify intent
     intent = classify_intent(request.input)
 
-    # 2. Resolve roles (primary + optional secondary)
-    roles = await resolve_roles(request.role, request.secondary_role)
+    # 2. Resolve roles — auto-infer if not explicitly set
+    if request.role:
+        roles = await resolve_roles(request.role, request.secondary_role)
+    else:
+        inferred_primary, inferred_secondary = infer_roles(request.input)
+        roles = await resolve_roles(inferred_primary, inferred_secondary)
 
-    # 3. Route to workflow
-    workflow = route_workflow(intent)
+    # 3. Smart agent selection based on prompt + intent
+    #    Check procedural memory first for proven patterns
+    proven = None
+    try:
+        proven = await lookup_proven_workflow(intent.value)
+    except Exception:
+        pass
 
-    # 4. Select model
+    if proven and proven["agents"]:
+        selected_agents = [a for a in proven["agents"] if a in _agents]
+        logger.info("procedural_routing", extra={
+            "pattern": proven["workflow_name"],
+            "success_rate": proven["success_rate"],
+            "agents": selected_agents,
+        })
+    else:
+        selected_agents = select_agents_for_task(request.input, intent)
+
+    # 4. Determine workflow from agent selection
+    if len(selected_agents) >= 2:
+        workflow = WorkflowType.multi_agent_competition
+    elif len(selected_agents) == 1:
+        agent_workflow_map = {
+            "research": WorkflowType.agent_research,
+            "analysis": WorkflowType.agent_analysis,
+            "planning": WorkflowType.agent_planning,
+        }
+        workflow = agent_workflow_map.get(selected_agents[0], WorkflowType.agent_research)
+    else:
+        workflow = route_workflow(intent)
+
+    # 5. Select model
     model = select_model(request.input)
 
-    # 5. Record decision
+    # 6. Record decision
     decision = OrchestratorDecision(
         request_id=request.request_id,
         roles=roles,
@@ -241,6 +299,7 @@ async def handle_task(
             "request_id": str(decision.request_id),
             "intent": intent.value,
             "workflow": workflow.value,
+            "selected_agents": selected_agents,
             "primary_role": roles.primary.role.value,
             "secondary_role": roles.secondary.role.value if roles.secondary else None,
             "domain": roles.primary.domain.value,
@@ -248,30 +307,27 @@ async def handle_task(
         },
     )
 
-    # 6. Execute workflow
+    # 7. Execute workflow
     structured = None
     content = ""
     retrieved_context: list[str] = []
 
     if workflow == WorkflowType.multi_agent_competition:
-        # Multi-agent: research + analysis compete, evaluate, adjudicate, optional synthesis
+        # Multi-agent: all selected agents compete, evaluate, synthesize
         results = await search_semantic(request.input, limit=3, http_client=http_client)
         retrieved_context = [r["content"] for r in results]
 
-        agent_names = _COMPETITION_AGENTS[WorkflowType.multi_agent_competition]
         structured, content = await _run_competition(
-            request, roles, http_client, agent_names, retrieved_context,
+            request, roles, http_client, selected_agents, retrieved_context,
             strategy=AdjudicationStrategy.synthesize,
         )
 
     elif workflow in (WorkflowType.agent_research, WorkflowType.agent_analysis, WorkflowType.agent_planning):
-        # Single-agent workflow with optional critic review
+        # Single-agent workflow
         results = await search_semantic(request.input, limit=3, http_client=http_client)
         retrieved_context = [r["content"] for r in results]
 
-        agent_names = _COMPETITION_AGENTS.get(workflow, [])
-        agent_name = agent_names[0] if agent_names else "research"
-
+        agent_name = selected_agents[0] if selected_agents else "research"
         agent_output = await _run_agent(
             agent_name, request, roles, http_client, retrieved_context
         )
@@ -301,12 +357,8 @@ async def handle_task(
         )
         structured, content = _parse_response(raw_response, request)
 
-    elif workflow == WorkflowType.execution:
-        raw_response = await _direct_generate(request, roles, model, http_client)
-        structured, content = _parse_response(raw_response, request)
-
     else:
-        # Direct response (default)
+        # Direct response / execution (default)
         raw_response = await _direct_generate(request, roles, model, http_client)
         structured, content = _parse_response(raw_response, request)
 
@@ -341,7 +393,12 @@ def _parse_response(raw_response: str, request: TaskRequest) -> tuple[dict | Non
     """Parse raw LLM response into (structured_output, content)."""
     try:
         structured = json.loads(raw_response)
-        content = str(structured.get("answer", raw_response))
+        answer = structured.get("answer", raw_response)
+        # If the answer is not a plain string, serialize it readably
+        if isinstance(answer, (dict, list)):
+            content = json.dumps(answer, indent=2)
+        else:
+            content = str(answer)
         return structured, content
     except (json.JSONDecodeError, AttributeError):
         logger.warning(
@@ -357,17 +414,27 @@ async def handle_competition(
 ) -> TaskResponse:
     """
     Explicit multi-agent competition endpoint.
-    User selects agents and adjudication strategy.
+    User can optionally select agents and adjudication strategy,
+    or let the system auto-select.
     """
     start = time.perf_counter()
 
-    roles = await resolve_roles(request.role, request.secondary_role)
+    # Auto-infer roles if not specified
+    if request.role:
+        roles = await resolve_roles(request.role, request.secondary_role)
+    else:
+        inferred_primary, inferred_secondary = infer_roles(request.input)
+        roles = await resolve_roles(inferred_primary, inferred_secondary)
+
     model = select_model(request.input)
 
-    # Validate agent names
+    # Validate agent names — fall back to auto-selection if needed
     agent_names = [a for a in request.agents if a in _agents]
     if len(agent_names) < 2:
-        agent_names = ["research", "analysis"]
+        intent = classify_intent(request.input)
+        agent_names = select_agents_for_task(request.input, intent)
+        if len(agent_names) < 2:
+            agent_names = ["research", "analysis"]
 
     # Map strategy string to enum
     try:

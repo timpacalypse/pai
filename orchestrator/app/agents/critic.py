@@ -21,7 +21,7 @@ class CriticAgent(BaseAgent):
             "- Suggest specific improvements.\n"
             "- Respond with valid JSON matching this schema:\n"
             "  {\n"
-            '    "answer": "<overall critique summary>",\n'
+            '    "answer": "<PLAIN TEXT string with your overall critique summary written in readable paragraphs>",\n'
             '    "strengths": ["<strength 1>", ...],\n'
             '    "weaknesses": ["<weakness 1>", ...],\n'
             '    "risks": ["<risk 1>", ...],\n'
@@ -29,6 +29,8 @@ class CriticAgent(BaseAgent):
             '    "reasoning": "<critique methodology>",\n'
             '    "confidence": <0.0-1.0>\n'
             "  }\n"
+            "- IMPORTANT: The 'answer' field MUST be a single plain text string (not a dict or list).\n"
+            "  Write it as a readable, well-structured response with full sentences.\n"
             "- Do not include any text outside the JSON object.\n"
         )
 

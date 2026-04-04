@@ -37,7 +37,7 @@ class PlanningAgent(BaseAgent):
             "- Prioritize based on role goals and constraints.\n"
             "- Respond with valid JSON matching this schema:\n"
             "  {\n"
-            '    "answer": "<plan summary>",\n'
+            '    "answer": "<PLAIN TEXT string with your complete plan summary written in readable paragraphs>",\n'
             '    "phases": [\n'
             "      {\n"
             '        "name": "<phase name>",\n'
@@ -50,6 +50,8 @@ class PlanningAgent(BaseAgent):
             '    "reasoning": "<planning rationale>",\n'
             '    "confidence": <0.0-1.0>\n'
             "  }\n"
+            "- IMPORTANT: The 'answer' field MUST be a single plain text string (not a dict or list).\n"
+            "  Write it as a readable, well-structured response with full sentences.\n"
             "- Do not include any text outside the JSON object.\n"
         )
 

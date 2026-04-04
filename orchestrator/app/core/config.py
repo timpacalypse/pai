@@ -9,6 +9,21 @@ class Settings(BaseSettings):
     orchestrator_env: str = "development"
     orchestrator_log_level: str = "info"
 
+    # Gmail notifications
+    gmail_address: str = ""
+    gmail_app_password: str = ""
+    gmail_recipient: str = ""  # defaults to gmail_address if empty
+
+    # Scheduled research
+    research_schedule_hours: float = 6.0  # 0 = disabled
+    research_topics: str = ""  # pipe-delimited override, e.g. "topic1|topic2"
+
+    # Daily meal scheduler
+    meal_schedule_hours: float = 24.0  # hours between meal emails, 0 = disabled
+
+    # Home maintenance alerts
+    home_alert_hours: float = 24.0  # hours between alert checks, 0 = disabled
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
