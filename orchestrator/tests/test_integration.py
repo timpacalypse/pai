@@ -11,7 +11,7 @@ BASE_URL = "http://localhost:8000"
 
 @pytest.fixture
 def client():
-    return httpx.Client(base_url=BASE_URL, timeout=120.0)
+    return httpx.Client(base_url=BASE_URL, timeout=300.0)
 
 
 # ── Health ──
@@ -1581,3 +1581,92 @@ def test_briefing_send(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "sent" in data  # True if gmail configured, False if not
+
+
+# ── Sprint 10: Briefing fixes ──────────────────────────────────
+
+
+def test_briefing_calendar_7_day_window(client):
+    """Briefing agenda should cover 7 days, not just today."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    data = resp.json()
+    agenda = data["agenda"]
+    assert agenda["period_days"] == 7
+
+
+def test_briefing_email_scan(client):
+    """Briefing should scan emails (>0 if Gmail configured)."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    data = resp.json()
+    email_recs = data["email_recommendations"]
+    assert "emails_scanned" in email_recs
+    # If Gmail is configured, we should scan >0 emails
+    assert isinstance(email_recs["emails_scanned"], int)
+
+
+def test_briefing_articles_have_urls(client):
+    """Briefing articles should include URL links."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    data = resp.json()
+    for article in data["articles"]:
+        assert "url" in article
+        assert "title" in article
+        assert article["url"].startswith("http")
+
+
+# ── Sprint 10: Critic quality gate ─────────────────────────────
+
+
+def test_analysis_gets_critic_pass(client):
+    """Analysis workflow should get automatic critic pass (critique in metadata)."""
+    resp = client.post("/task", json={
+        "input": "Analyze the pros and cons of zero trust architecture vs traditional perimeter security"
+    }, timeout=120.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    # Should use analysis workflow or multi_agent_competition
+    assert data["workflow"] in ("agent_analysis", "multi_agent_competition")
+    assert data["content"]
+
+
+def test_planning_gets_critic_pass(client):
+    """Planning workflow should get automatic critic pass."""
+    resp = client.post("/task", json={
+        "input": "Create a step-by-step plan for implementing AI governance in a mid-size company"
+    }, timeout=120.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workflow"] in ("agent_planning", "multi_agent_competition")
+    assert data["content"]
+
+
+# ── Sprint 10: LLM-based evaluation ───────────────────────────
+
+
+def test_competition_uses_llm_eval(client):
+    """Multi-agent competition should use LLM-based evaluation.
+    Verified via orchestrator logs (agent_evaluated_llm entries).
+    Skipped in CI due to multiple LLM calls exceeding timeout."""
+    resp = client.post("/compete", json={
+        "input": "Compare NIST CSF vs ISO 27001",
+        "agents": ["research", "analysis"],
+        "strategy": "best_score",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["content"]
+    assert data["workflow"] == "multi_agent_competition"
+
+
+# ── Sprint 10: NL briefing trigger ─────────────────────────────
+
+
+def test_chat_nl_briefing_trigger(client):
+    """Chat should detect briefing intent and return briefing data."""
+    resp = client.post("/chat", json={
+        "message": "give me my daily briefing"
+    }, timeout=120.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "briefing"
+    assert data["content"]

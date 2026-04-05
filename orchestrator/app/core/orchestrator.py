@@ -18,7 +18,7 @@ from app.agents.analysis import AnalysisAgent
 from app.agents.planning import PlanningAgent
 from app.agents.critic import CriticAgent
 from app.agents.synthesizer import SynthesizerAgent
-from app.evaluation.scorer import evaluate_output
+from app.evaluation.scorer import evaluate_output, evaluate_output_llm
 from app.evaluation.adjudicator import adjudicate, AdjudicationStrategy
 from app.memory.semantic import search_semantic
 from app.services.quality_service import store_scores
@@ -123,8 +123,12 @@ async def _run_competition(
     if len(outputs) == 1:
         return outputs[0].metadata or None, outputs[0].result
 
-    # 2. Evaluate all outputs
-    scores = [evaluate_output(o, request.input) for o in outputs]
+    # 2. Evaluate all outputs (LLM-based with heuristic fallback)
+    eval_tasks = [
+        evaluate_output_llm(o, request.input, http_client)
+        for o in outputs
+    ]
+    scores = await asyncio.gather(*eval_tasks)
 
     # 3. Adjudicate
     result = adjudicate(outputs, scores, strategy=strategy)
@@ -332,6 +336,15 @@ async def handle_task(
             agent_name, request, roles, http_client, retrieved_context
         )
         if agent_output:
+            # Critic quality gate for high-stakes workflows (analysis, planning)
+            if workflow in (WorkflowType.agent_analysis, WorkflowType.agent_planning):
+                try:
+                    agent_output = await _run_with_critic(
+                        request, roles, http_client, agent_output
+                    )
+                except Exception as e:
+                    logger.warning("critic_pass_failed", extra={"error": str(e)})
+
             content = agent_output.result
             structured = agent_output.metadata or None
         else:

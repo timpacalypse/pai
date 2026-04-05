@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     weather_lat: str = ""  # latitude for weather (e.g. "38.9072" for DC)
     weather_lon: str = ""  # longitude for weather (e.g. "-77.0369" for DC)
 
+    # Autonomous background workflows
+    autonomous_schedule_hours: float = 12.0  # hours between autonomous runs, 0 = disabled
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

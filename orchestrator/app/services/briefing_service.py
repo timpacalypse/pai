@@ -115,9 +115,9 @@ async def _get_top_articles(limit: int = 8) -> list[dict]:
 
 
 async def _get_today_agenda() -> dict:
-    """Get today's events from calendar_service."""
+    """Get upcoming events from calendar_service (next 7 days)."""
     from app.services.calendar_service import get_agenda
-    return await get_agenda(days=2)
+    return await get_agenda(days=7)
 
 
 def _read_gmail_inbox(max_emails: int = 15) -> list[dict]:
@@ -131,9 +131,10 @@ def _read_gmail_inbox(max_emails: int = 15) -> list[dict]:
         mail.login(settings.gmail_address, settings.gmail_app_password)
         mail.select("INBOX", readonly=True)
 
-        # Search for recent emails (last 24h)
-        today = datetime.now(timezone.utc).strftime("%d-%b-%Y")
-        _, msg_ids = mail.search(None, f'(SINCE "{today}")')
+        # Search for recent emails (last 2 days to handle timezone gaps)
+        from datetime import timedelta
+        since_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+        _, msg_ids = mail.search(None, f'(SINCE "{since_date}")')
         id_list = msg_ids[0].split()
 
         # Take the most recent N
@@ -412,8 +413,12 @@ def build_briefing_text(briefing: dict) -> str:
     articles = briefing.get("articles", [])
     lines.append(f"TOP ARTICLES ({len(articles)}):")
     for i, a in enumerate(articles, 1):
-        lines.append(f"  {i}. {a.get('title', 'Untitled')}")
-        lines.append(f"     {a.get('url', '')}")
+        source = a.get('source', '')
+        score = a.get('score', 0)
+        lines.append(f"  {i}. [{score:.2f}] {a.get('title', 'Untitled')}")
+        lines.append(f"     Link: {a.get('url', '')}")
+        if source:
+            lines.append(f"     Source: {source}")
     lines.append("")
 
     # Calendar
