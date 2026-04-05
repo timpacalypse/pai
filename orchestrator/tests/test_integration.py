@@ -1440,3 +1440,144 @@ def test_learning_generate(client):
     data = resp.json()
     # Should return an experiment or an error if no quality data
     assert "experiment_id" in data or "error" in data or "status" in data
+
+
+# ── Sprint 9: Conversation Memory ──────────────────────────────
+
+
+def test_chat_persists_to_memory(client):
+    """POST /chat should persist turns to episodic_memory."""
+    import uuid
+    cid = str(uuid.uuid4())
+    resp = client.post("/chat", json={
+        "message": "What is the capital of France?",
+        "conversation_id": cid,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["content"]
+    assert data["conversation_id"] == cid
+
+    # Now retrieve history
+    hist_resp = client.get(f"/chat/history?conversation_id={cid}")
+    assert hist_resp.status_code == 200
+    hist = hist_resp.json()
+    assert hist["conversation_id"] == cid
+    assert len(hist["turns"]) >= 2  # user + assistant
+    assert hist["turns"][0]["role_name"] == "user"
+    assert hist["turns"][1]["role_name"] == "assistant"
+
+
+def test_chat_history_empty(client):
+    """GET /chat/history for unknown conversation returns empty."""
+    import uuid
+    resp = client.get(f"/chat/history?conversation_id={uuid.uuid4()}")
+    assert resp.status_code == 200
+    assert resp.json()["turns"] == []
+
+
+def test_chat_conversations_list(client):
+    """GET /chat/conversations returns recent conversations."""
+    resp = client.get("/chat/conversations")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "conversations" in data
+    assert isinstance(data["conversations"], list)
+
+
+# ── Sprint 9: Learning Loop promote/rollback ───────────────────
+
+
+def test_learning_promote_not_found(client):
+    """POST /learning/promote with fake ID returns error."""
+    resp = client.post("/learning/promote/fake-id-123")
+    assert resp.status_code == 200
+    assert "error" in resp.json()
+
+
+def test_learning_rollback_not_found(client):
+    """POST /learning/rollback with fake ID returns error."""
+    resp = client.post("/learning/rollback/fake-id-123")
+    assert resp.status_code == 200
+    assert "error" in resp.json()
+
+
+def test_learning_overrides_list(client):
+    """GET /learning/overrides returns list (may be empty)."""
+    resp = client.get("/learning/overrides")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "overrides" in data
+    assert isinstance(data["overrides"], list)
+
+
+def test_learning_promote_and_rollback(client):
+    """Full promote → rollback cycle."""
+    # Generate an experiment first
+    gen_resp = client.post("/learning/generate", timeout=120.0)
+    assert gen_resp.status_code == 200
+    gen = gen_resp.json()
+
+    if gen.get("status") == "skip":
+        pytest.skip("No quality data available to generate an experiment")
+
+    eid = gen.get("experiment_id")
+    if not eid:
+        pytest.skip("Experiment generation failed")
+
+    # Promote
+    promote_resp = client.post(f"/learning/promote/{eid}")
+    assert promote_resp.status_code == 200
+    assert promote_resp.json().get("status") == "promoted"
+
+    # Verify override exists
+    overrides = client.get("/learning/overrides").json()
+    assert any(o["experiment_id"] == eid for o in overrides["overrides"])
+
+    # Rollback
+    rollback_resp = client.post(f"/learning/rollback/{eid}")
+    assert rollback_resp.status_code == 200
+    assert rollback_resp.json().get("status") == "rolled_back"
+
+    # Verify override is gone
+    overrides2 = client.get("/learning/overrides").json()
+    assert not any(o["experiment_id"] == eid for o in overrides2["overrides"])
+
+
+# ── Sprint 9: Daily Briefing ───────────────────────────────────
+
+
+def test_briefing_preview(client):
+    """GET /skills/briefing/preview returns briefing data."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "weather" in data
+    assert "articles" in data
+    assert "agenda" in data
+    assert "email_recommendations" in data
+    assert "generated_at" in data
+
+
+def test_briefing_preview_has_agenda(client):
+    """Briefing preview includes calendar agenda structure."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    data = resp.json()
+    agenda = data["agenda"]
+    assert "total_events" in agenda
+    assert "agenda" in agenda
+
+
+def test_briefing_preview_articles(client):
+    """Briefing preview articles is a list."""
+    resp = client.get("/skills/briefing/preview", timeout=120.0)
+    data = resp.json()
+    assert isinstance(data["articles"], list)
+
+
+def test_briefing_send(client):
+    """POST /skills/briefing sends the briefing email."""
+    resp = client.post("/skills/briefing", timeout=120.0)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sent" in data  # True if gmail configured, False if not

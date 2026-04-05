@@ -16,6 +16,7 @@ from app.services.role_service import load_roles
 from app.services.scheduler import scheduler_loop
 from app.services.meal_scheduler import meal_scheduler_loop
 from app.services.home_alert_scheduler import home_alert_scheduler_loop
+from app.services.briefing_scheduler import briefing_scheduler_loop
 
 # ── Structured logging ──
 logging.basicConfig(
@@ -42,10 +43,13 @@ async def lifespan(app: FastAPI):
     home_alert_task = asyncio.create_task(home_alert_scheduler_loop())
     app.state.home_alert_task = home_alert_task
 
+    briefing_task = asyncio.create_task(briefing_scheduler_loop())
+    app.state.briefing_task = briefing_task
+
     yield
 
     # Shutdown
-    for task in (scheduler_task, meal_task, home_alert_task):
+    for task in (scheduler_task, meal_task, home_alert_task, briefing_task):
         task.cancel()
         try:
             await task

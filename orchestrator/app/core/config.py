@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Home maintenance alerts
     home_alert_hours: float = 24.0  # hours between alert checks, 0 = disabled
 
+    # Daily briefing
+    briefing_schedule_hours: float = 24.0  # hours between briefings, 0 = disabled
+    weather_lat: str = ""  # latitude for weather (e.g. "38.9072" for DC)
+    weather_lon: str = ""  # longitude for weather (e.g. "-77.0369" for DC)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

@@ -331,6 +331,17 @@ async def chat(req: ChatRequest, request: Request):
 
     duration_ms = (time.perf_counter() - start) * 1000
 
+    # Persist chat turn to episodic memory
+    from app.memory.episodic import log_chat_turn
+    await log_chat_turn(
+        conversation_id=str(req.conversation_id),
+        role=roles.primary.role.value,
+        user_message=req.message,
+        assistant_message=content,
+        domain=roles.primary.domain.value,
+        duration_ms=round(duration_ms, 2),
+    )
+
     return ChatResponse(
         request_id=req.request_id,
         conversation_id=req.conversation_id,
@@ -340,6 +351,22 @@ async def chat(req: ChatRequest, request: Request):
         content=content,
         duration_ms=round(duration_ms, 2),
     )
+
+
+@router.get("/chat/history")
+async def chat_history(conversation_id: str, limit: int = 50):
+    """Retrieve persisted chat history for a conversation."""
+    from app.memory.episodic import get_chat_history
+    turns = await get_chat_history(conversation_id, limit=limit)
+    return {"conversation_id": conversation_id, "turns": turns}
+
+
+@router.get("/chat/conversations")
+async def chat_conversations(limit: int = 20):
+    """List recent conversations with previews."""
+    from app.memory.episodic import list_conversations
+    convos = await list_conversations(limit=limit)
+    return {"conversations": convos}
 
 
 async def _gather_skill_context(message: str) -> list[str]:
@@ -1048,3 +1075,44 @@ async def learning_evaluate(experiment_id: str, request: Request):
     """Evaluate a pending experiment against current quality stats."""
     from app.services.learning_service import evaluate_experiment
     return await evaluate_experiment(experiment_id, http_client=request.app.state.http_client)
+
+
+@router.post("/learning/promote/{experiment_id}")
+async def learning_promote(experiment_id: str):
+    """Promote an experiment — apply its improvement as an active prompt override."""
+    from app.services.learning_service import promote_experiment
+    return await promote_experiment(experiment_id)
+
+
+@router.post("/learning/rollback/{experiment_id}")
+async def learning_rollback(experiment_id: str):
+    """Rollback a promoted experiment — deactivate its override."""
+    from app.services.learning_service import rollback_experiment
+    return await rollback_experiment(experiment_id)
+
+
+@router.get("/learning/overrides")
+async def learning_overrides():
+    """List all active prompt overrides."""
+    from app.services.learning_service import get_active_overrides
+    overrides = await get_active_overrides()
+    return {"overrides": overrides}
+
+
+# ── Daily Briefing ──────────────────────────────────────────────
+
+
+@router.post("/skills/briefing")
+async def send_briefing(request: Request):
+    """Build and send the daily briefing email now."""
+    from app.services.briefing_service import send_daily_briefing
+    sent = await send_daily_briefing(http_client=request.app.state.http_client)
+    return {"sent": sent}
+
+
+@router.get("/skills/briefing/preview")
+async def preview_briefing(request: Request):
+    """Build the daily briefing data without sending email."""
+    from app.services.briefing_service import build_daily_briefing
+    briefing = await build_daily_briefing(http_client=request.app.state.http_client)
+    return briefing

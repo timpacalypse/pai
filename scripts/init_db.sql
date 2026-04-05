@@ -406,3 +406,22 @@ CREATE TABLE IF NOT EXISTS learning_experiments (
 
 CREATE INDEX IF NOT EXISTS idx_experiments_status
     ON learning_experiments (status);
+
+-- ── Sprint 9: Prompt Overrides (Learning Loop promote/rollback) ──
+
+CREATE TABLE IF NOT EXISTS prompt_overrides (
+    id SERIAL PRIMARY KEY,
+    target VARCHAR(50) NOT NULL,           -- 'agent_prompt' or 'workflow_rule'
+    agent_name VARCHAR(50) DEFAULT '',     -- which agent this targets
+    original_value TEXT DEFAULT '',         -- stored on first promote for rollback
+    override_value TEXT NOT NULL,           -- the new prompt/rule text
+    experiment_id VARCHAR(64) NOT NULL,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_overrides_agent
+    ON prompt_overrides (agent_name, active);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_overrides_experiment
+    ON prompt_overrides (experiment_id);

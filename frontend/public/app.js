@@ -27,9 +27,6 @@ const homeOpts = document.getElementById('home-options');
 const medicalOpts = document.getElementById('medical-options');
 const recipesOpts = document.getElementById('recipes-options');
 const calendarOpts = document.getElementById('calendar-options');
-const medicalOpts = document.getElementById('medical-options');
-const recipesOpts = document.getElementById('recipes-options');
-const calendarOpts = document.getElementById('calendar-options');
 const timeFilter = document.getElementById('time-filter');
 const autoIngest = document.getElementById('auto-ingest');
 const strategySelect = document.getElementById('strategy-select');
@@ -59,10 +56,7 @@ async function init() {
             btn.classList.add('active');
             state.mode = btn.dataset.mode;
 
-            researchOpts.classList.toggle('hidden', state.mode !== 'res
-            medicalOpts.classList.toggle('hidden', state.mode !== 'medical');
-            recipesOpts.classList.toggle('hidden', state.mode !== 'recipes');
-            calendarOpts.classList.toggle('hidden', state.mode !== 'calendar');earch');
+            researchOpts.classList.toggle('hidden', state.mode !== 'research');
             competeOpts.classList.toggle('hidden', state.mode !== 'compete');
             mealsOpts.classList.toggle('hidden', state.mode !== 'meals');
             homeOpts.classList.toggle('hidden', state.mode !== 'home');
@@ -109,17 +103,10 @@ async function init() {
     document.getElementById('home-alerts-btn').addEventListener('click', checkHomeAlerts);
     document.getElementById('home-docs-btn').addEventListener('click', searchHomeDocs);
 
-    // Medical mode buttons
-    document.getElementById('medical-records-btn').addEventListener('click', loadMedicalRecords);
-
-    // Recipes mode buttons
-    document.getElementById('recipes-list-btn').addEventListener('click', loadRecipes);
-
-    // Calendar mode buttons
-    document.getElementById('calendar-agenda-btn').addEventListener('click', loadAgenda);
-    document.getElementById('calendar-events-btn').addEventListener('click', loadAllEvents);
-
     addSystemMessage('Welcome to PAI. Your roles and agents are auto-selected from your prompt. Override with the dropdowns if needed.');
+
+    // Try to reload last conversation from server
+    await loadConversationHistory();
 }
 
 // ── Load roles into dropdowns ──
@@ -406,6 +393,21 @@ function clearChat() {
     state.history = [];
     state.conversationId = crypto.randomUUID();
     addSystemMessage('Chat cleared. Starting fresh conversation.');
+}
+
+async function loadConversationHistory() {
+    try {
+        const resp = await fetch(`${API}/chat/history?conversation_id=${state.conversationId}`);
+        const data = await resp.json();
+        if (data.turns && data.turns.length > 0) {
+            state.history = data.turns.slice(-20);
+            for (const turn of data.turns) {
+                addMessage(turn.content, turn.role_name === 'user' ? 'user' : 'ai');
+            }
+        }
+    } catch (e) {
+        // No history to load — that's fine
+    }
 }
 
 // ── Meals Mode ──

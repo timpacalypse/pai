@@ -162,6 +162,122 @@ async def evaluate_experiment(experiment_id: str, http_client=None) -> dict:
     }
 
 
+async def promote_experiment(experiment_id: str) -> dict:
+    """Apply a promoted experiment's improvement as an active prompt override."""
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT experiment_id, improvement, status "
+                "FROM learning_experiments WHERE experiment_id = :eid"
+            ),
+            {"eid": experiment_id},
+        )
+        row = result.mappings().fetchone()
+        if not row:
+            return {"error": "Experiment not found"}
+        if row["status"] not in ("pending", "promoted"):
+            return {"error": f"Cannot promote — experiment status is {row['status']}"}
+
+    improvement = row["improvement"] if isinstance(row["improvement"], dict) else {}
+    target = improvement.get("target", "agent_prompt")
+    agent_name = improvement.get("agent_name", "")
+    change = improvement.get("change", "")
+
+    if not change:
+        return {"error": "No change text in improvement"}
+
+    # Get current prompt as original_value (for rollback)
+    original = ""
+    if target == "agent_prompt" and agent_name:
+        from app.services.prompt_service import get_agent_system_prompt
+        original = get_agent_system_prompt(agent_name)
+
+    async with async_session() as session:
+        # Deactivate any existing override for this agent
+        if agent_name:
+            await session.execute(
+                text(
+                    "UPDATE prompt_overrides SET active = FALSE "
+                    "WHERE agent_name = :agent AND active = TRUE"
+                ),
+                {"agent": agent_name},
+            )
+
+        await session.execute(
+            text(
+                "INSERT INTO prompt_overrides "
+                "(target, agent_name, original_value, override_value, experiment_id) "
+                "VALUES (:target, :agent, :original, :override, :eid) "
+                "ON CONFLICT (experiment_id) DO UPDATE SET "
+                "  active = TRUE, override_value = EXCLUDED.override_value"
+            ),
+            {
+                "target": target,
+                "agent": agent_name,
+                "original": original,
+                "override": change,
+                "eid": experiment_id,
+            },
+        )
+
+        # Update experiment status
+        await session.execute(
+            text(
+                "UPDATE learning_experiments SET status = 'promoted', "
+                "evaluated_at = NOW() WHERE experiment_id = :eid"
+            ),
+            {"eid": experiment_id},
+        )
+        await session.commit()
+
+    logger.info("experiment_promoted", extra={"experiment_id": experiment_id, "agent": agent_name})
+    return {"status": "promoted", "experiment_id": experiment_id, "agent_name": agent_name}
+
+
+async def rollback_experiment(experiment_id: str) -> dict:
+    """Rollback a promoted experiment — deactivate its override."""
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT id, active FROM prompt_overrides WHERE experiment_id = :eid"
+            ),
+            {"eid": experiment_id},
+        )
+        row = result.mappings().fetchone()
+        if not row:
+            return {"error": "No override found for this experiment"}
+        if not row["active"]:
+            return {"error": "Override already inactive"}
+
+        await session.execute(
+            text("UPDATE prompt_overrides SET active = FALSE WHERE experiment_id = :eid"),
+            {"eid": experiment_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE learning_experiments SET status = 'rolled_back', "
+                "evaluated_at = NOW() WHERE experiment_id = :eid"
+            ),
+            {"eid": experiment_id},
+        )
+        await session.commit()
+
+    logger.info("experiment_rolled_back", extra={"experiment_id": experiment_id})
+    return {"status": "rolled_back", "experiment_id": experiment_id}
+
+
+async def get_active_overrides() -> list[dict]:
+    """Get all active prompt overrides."""
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT target, agent_name, override_value, experiment_id, created_at "
+                "FROM prompt_overrides WHERE active = TRUE ORDER BY created_at DESC"
+            )
+        )
+        return [dict(r) for r in result.mappings()]
+
+
 async def _store_experiment(experiment_id: str, improvement: dict, baseline_stats: list) -> None:
     """Persist a learning experiment."""
     async with async_session() as session:

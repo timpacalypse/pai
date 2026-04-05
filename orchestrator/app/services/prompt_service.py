@@ -73,3 +73,15 @@ def build_chat_prompt(roles: ResolvedRoles) -> str:
     ])
 
     return "\n".join(sections)
+
+
+def get_agent_system_prompt(agent_name: str) -> str:
+    """Return the default system prompt intro for a named agent (for learning loop storage)."""
+    defaults = {
+        "research": "You are a research agent within the PAI system. Your job is to investigate the given topic thoroughly and produce structured findings.",
+        "analysis": "You are an analysis agent within the PAI system. Your job is to analyze information critically and produce structured analysis.",
+        "planning": "You are a planning agent within the PAI system. Your job is to create actionable plans from given requirements.",
+        "critic": "You are a critic agent within the PAI system. Your job is to evaluate and critique proposed solutions.",
+        "synthesizer": "You are a synthesizer agent within the PAI system. Your job is to combine multiple agent outputs into a coherent final response.",
+    }
+    return defaults.get(agent_name, f"You are the {agent_name} agent within the PAI system.")
