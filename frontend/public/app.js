@@ -24,6 +24,12 @@ const researchOpts = document.getElementById('research-options');
 const competeOpts = document.getElementById('compete-options');
 const mealsOpts = document.getElementById('meals-options');
 const homeOpts = document.getElementById('home-options');
+const medicalOpts = document.getElementById('medical-options');
+const recipesOpts = document.getElementById('recipes-options');
+const calendarOpts = document.getElementById('calendar-options');
+const medicalOpts = document.getElementById('medical-options');
+const recipesOpts = document.getElementById('recipes-options');
+const calendarOpts = document.getElementById('calendar-options');
 const timeFilter = document.getElementById('time-filter');
 const autoIngest = document.getElementById('auto-ingest');
 const strategySelect = document.getElementById('strategy-select');
@@ -53,24 +59,46 @@ async function init() {
             btn.classList.add('active');
             state.mode = btn.dataset.mode;
 
-            researchOpts.classList.toggle('hidden', state.mode !== 'research');
+            researchOpts.classList.toggle('hidden', state.mode !== 'res
+            medicalOpts.classList.toggle('hidden', state.mode !== 'medical');
+            recipesOpts.classList.toggle('hidden', state.mode !== 'recipes');
+            calendarOpts.classList.toggle('hidden', state.mode !== 'calendar');earch');
             competeOpts.classList.toggle('hidden', state.mode !== 'compete');
             mealsOpts.classList.toggle('hidden', state.mode !== 'meals');
             homeOpts.classList.toggle('hidden', state.mode !== 'home');
+            medicalOpts.classList.toggle('hidden', state.mode !== 'medical');
+            recipesOpts.classList.toggle('hidden', state.mode !== 'recipes');
+            calendarOpts.classList.toggle('hidden', state.mode !== 'calendar');
 
             // Update placeholder
             const placeholders = {
+                medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
+                recipes: 'Save a recipe (e.g. paste a recipe title + ingredients) or search...',
+                calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
                 chat: 'Type a message...',
                 task: 'Describe a task...',
                 research: 'Enter a research topic...',
                 compete: 'Enter a task for multi-agent competition...',
                 meals: 'Add family member or preference (e.g. "Add Tim, adult") or extra meal plan instructions...',
                 home: 'Tell PAI about your home (e.g. "I replaced the air filter today, replace every 3 months")...',
+                medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
+                recipes: 'Save a recipe (e.g. paste a recipe title + ingredients) or search...',
+                calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
             };
             inputEl.placeholder = placeholders[state.mode] || 'Type a message...';
         });
     });
 
+
+    // Medical mode buttons
+    document.getElementById('medical-records-btn').addEventListener('click', loadMedicalRecords);
+
+    // Recipes mode buttons
+    document.getElementById('recipes-list-btn').addEventListener('click', loadRecipes);
+
+    // Calendar mode buttons
+    document.getElementById('calendar-agenda-btn').addEventListener('click', loadAgenda);
+    document.getElementById('calendar-events-btn').addEventListener('click', loadAllEvents);
     // Meals mode buttons
     document.getElementById('load-family-btn').addEventListener('click', loadFamily);
     document.getElementById('gen-plan-btn').addEventListener('click', generateMealPlan);
@@ -80,6 +108,16 @@ async function init() {
     document.getElementById('home-items-btn').addEventListener('click', loadHomeItems);
     document.getElementById('home-alerts-btn').addEventListener('click', checkHomeAlerts);
     document.getElementById('home-docs-btn').addEventListener('click', searchHomeDocs);
+
+    // Medical mode buttons
+    document.getElementById('medical-records-btn').addEventListener('click', loadMedicalRecords);
+
+    // Recipes mode buttons
+    document.getElementById('recipes-list-btn').addEventListener('click', loadRecipes);
+
+    // Calendar mode buttons
+    document.getElementById('calendar-agenda-btn').addEventListener('click', loadAgenda);
+    document.getElementById('calendar-events-btn').addEventListener('click', loadAllEvents);
 
     addSystemMessage('Welcome to PAI. Your roles and agents are auto-selected from your prompt. Override with the dropdowns if needed.');
 }
@@ -153,6 +191,15 @@ async function handleSend() {
                 break;
             case 'home':
                 data = await handleHomeInput(text);
+                break;
+            case 'medical':
+                data = await handleMedicalInput(text);
+                break;
+            case 'recipes':
+                data = await handleRecipeInput(text);
+                break;
+            case 'calendar':
+                data = await handleCalendarInput(text);
                 break;
         }
         loadingEl.remove();
@@ -747,3 +794,204 @@ function renderHomeDocs(docs) {
 
 // ── Start ──
 init();
+
+
+// ── Medical Mode ──
+
+async function handleMedicalInput(text) {
+    const resp = await fetch(`${API}/skills/medical/tell`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    renderActionResult(data, 'medical');
+    return null;
+}
+
+async function loadMedicalRecords() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/medical/records`);
+        const data = await resp.json();
+        loadingEl.remove();
+        renderListCards(data.records || [], 'medical', r =>
+            `${r.member_name} — ${r.category} on ${r.record_date}: ${r.summary}`
+        );
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+
+// ── Recipes Mode ──
+
+async function handleRecipeInput(text) {
+    // If it looks like a search, search. Otherwise save as a recipe title.
+    const lower = text.toLowerCase();
+    if (lower.startsWith('search ') || lower.startsWith('find ')) {
+        const query = text.replace(/^(search|find)\s+/i, '');
+        const resp = await fetch(`${API}/skills/recipes?search=${encodeURIComponent(query)}`);
+        const data = await resp.json();
+        renderListCards(data.recipes || [], 'recipes', r => {
+            const rating = r.family_rating ? ` ★${r.family_rating}` : '';
+            return `${r.title}${rating}${r.cuisine ? ' [' + r.cuisine + ']' : ''}`;
+        });
+        return null;
+    }
+    // Save as recipe
+    const resp = await fetch(`${API}/skills/recipes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: text }),
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    addMessage(`Saved recipe: ${data.title}`, 'ai', 'recipes');
+    return null;
+}
+
+async function loadRecipes() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/recipes?limit=20`);
+        const data = await resp.json();
+        loadingEl.remove();
+        renderListCards(data.recipes || [], 'recipes', r => {
+            const rating = r.family_rating ? ` ★${r.family_rating}` : '';
+            return `${r.title}${rating}${r.cuisine ? ' [' + r.cuisine + ']' : ''}`;
+        });
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+
+// ── Calendar Mode ──
+
+async function handleCalendarInput(text) {
+    const resp = await fetch(`${API}/skills/calendar/tell`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    renderActionResult(data, 'calendar');
+    return null;
+}
+
+async function loadAgenda() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/calendar/agenda?days=14`);
+        const data = await resp.json();
+        loadingEl.remove();
+        const div = document.createElement('div');
+        div.className = 'message ai';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.innerHTML = `<span class="role-tag">calendar</span> ${data.total_events} events next 14 days`;
+        div.appendChild(metaEl);
+
+        if (data.total_events === 0) {
+            div.appendChild(Object.assign(document.createElement('p'), { textContent: 'No upcoming events.' }));
+        } else {
+            for (const [date, events] of Object.entries(data.agenda)) {
+                const h = document.createElement('h4');
+                h.style.cssText = 'color:#4f8ef7;margin:10px 0 4px;font-size:13px;';
+                h.textContent = date;
+                div.appendChild(h);
+                for (const e of events) {
+                    const p = document.createElement('div');
+                    const time = e.event_time ? ` at ${e.event_time}` : '';
+                    const who = e.family_member_name !== 'family' ? ` (${e.family_member_name})` : '';
+                    p.style.cssText = 'padding:2px 0;font-size:13px;';
+                    p.textContent = `• ${e.title}${time}${who}`;
+                    div.appendChild(p);
+                }
+            }
+        }
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function loadAllEvents() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/calendar/events?limit=30`);
+        const data = await resp.json();
+        loadingEl.remove();
+        renderListCards(data.events || [], 'calendar', e => {
+            const time = e.event_time ? ` at ${e.event_time}` : '';
+            const who = e.family_member_name !== 'family' ? ` (${e.family_member_name})` : '';
+            const recur = e.recurrence !== 'none' ? ` [${e.recurrence}]` : '';
+            return `${e.event_date}${time}: ${e.title}${who}${recur}`;
+        });
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+
+// ── Shared Renderers ──
+
+function renderActionResult(data, tag) {
+    const div = document.createElement('div');
+    div.className = 'message ai';
+    const metaEl = document.createElement('div');
+    metaEl.className = 'meta';
+    metaEl.innerHTML = `<span class="role-tag">${escapeHtml(tag)}</span> Processed`;
+    div.appendChild(metaEl);
+
+    if (data.error) {
+        div.appendChild(Object.assign(document.createElement('p'), {
+            textContent: data.error, style: 'color:#f44336;',
+        }));
+    } else {
+        const actions = data.actions || [];
+        if (actions.length) {
+            const ul = document.createElement('ul');
+            ul.style.cssText = 'list-style:none;padding:0;margin:8px 0;';
+            for (const a of actions) {
+                const li = document.createElement('li');
+                li.style.cssText = 'padding:4px 0;color:#4caf50;';
+                li.textContent = '✓ ' + a;
+                ul.appendChild(li);
+            }
+            div.appendChild(ul);
+        }
+    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function renderListCards(items, tag, formatter) {
+    const div = document.createElement('div');
+    div.className = 'message ai';
+    const metaEl = document.createElement('div');
+    metaEl.className = 'meta';
+    metaEl.innerHTML = `<span class="role-tag">${escapeHtml(tag)}</span> ${items.length} items`;
+    div.appendChild(metaEl);
+
+    if (!items.length) {
+        div.appendChild(Object.assign(document.createElement('p'), { textContent: 'No items found.' }));
+    } else {
+        for (const item of items) {
+            const card = document.createElement('div');
+            card.className = 'research-card';
+            card.innerHTML = `<div class="rc-title">${escapeHtml(formatter(item))}</div>`;
+            div.appendChild(card);
+        }
+    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}

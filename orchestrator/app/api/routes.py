@@ -10,6 +10,10 @@ from app.models.schemas import (
     ChatRequest, ChatResponse,
     FamilyMemberRequest, PreferenceRequest, MealRatingRequest, MealPlanRequest,
     HomeTellRequest, HomeItemRequest, HomeTaskCompleteRequest, HomeDocumentRequest,
+    IngestURLRequest, IngestTextRequest,
+    MedicalTellRequest, MedicalRecordRequest,
+    RecipeRequest, RecipeRateRequest,
+    CalendarTellRequest, CalendarEventRequest,
 )
 from app.core.orchestrator import handle_task, handle_competition
 from app.core.config import settings
@@ -406,6 +410,49 @@ async def _gather_skill_context(message: str) -> list[str]:
         except Exception:
             pass
 
+    # Recipe keywords
+    recipe_keywords = ["recipe", "recipes", "saved recipe", "what recipes", "how to make"]
+    if any(kw in lower for kw in recipe_keywords):
+        try:
+            from app.services.recipe_service import build_recipe_context
+            # Extract a search term from the message
+            recipe_ctx = await build_recipe_context(search=message[:80])
+            if recipe_ctx:
+                context.append(recipe_ctx)
+        except Exception:
+            pass
+
+    # Medical keywords
+    medical_keywords = [
+        "doctor", "medical", "health", "prescription", "medication", "dentist",
+        "appointment", "checkup", "vaccine", "vaccination", "surgery", "lab",
+        "blood pressure", "diagnosis", "specialist", "pediatrician", "allergy",
+        "allergies", "sick", "symptoms", "vision", "eye", "dental",
+    ]
+    if any(kw in lower for kw in medical_keywords):
+        try:
+            from app.services.medical_service import build_medical_context
+            med_ctx = await build_medical_context()
+            if med_ctx:
+                context.append(med_ctx)
+        except Exception:
+            pass
+
+    # Calendar/event keywords
+    calendar_keywords = [
+        "calendar", "schedule", "event", "appointment", "birthday", "upcoming",
+        "what's coming up", "next week", "this week", "agenda", "when is",
+        "what do we have", "plans for", "busy",
+    ]
+    if any(kw in lower for kw in calendar_keywords):
+        try:
+            from app.services.calendar_service import build_calendar_context
+            cal_ctx = await build_calendar_context(days=14)
+            if cal_ctx:
+                context.append(cal_ctx)
+        except Exception:
+            pass
+
     return context
 
 
@@ -697,3 +744,307 @@ async def procedural_memory_list(intent: str | None = None):
     """List proven workflow patterns from procedural memory."""
     from app.services.procedural_memory import get_patterns
     return await get_patterns(intent)
+
+
+# ── Document Ingestion ──────────────────────────────────────────
+
+
+@router.post("/skills/ingest/url")
+async def ingest_url(req: IngestURLRequest, request: Request):
+    """Ingest a web page into semantic memory (extract, chunk, embed)."""
+    from app.services.document_ingestion import ingest_url as do_ingest
+    result = await do_ingest(req.url, http_client=request.app.state.http_client)
+    return result
+
+
+@router.post("/skills/ingest/text")
+async def ingest_text(req: IngestTextRequest, request: Request):
+    """Ingest raw text into semantic memory (chunk, embed)."""
+    from app.services.document_ingestion import ingest_text as do_ingest
+    result = await do_ingest(
+        req.text, title=req.title, source=req.source,
+        http_client=request.app.state.http_client,
+    )
+    return result
+
+
+@router.post("/skills/ingest/file")
+async def ingest_file(request: Request):
+    """Upload and ingest a file (PDF, TXT, MD, HTML) into semantic memory."""
+    from fastapi import UploadFile
+    from app.services.document_ingestion import ingest_file as do_ingest
+
+    form = await request.form()
+    file = form.get("file")
+    if not file or not hasattr(file, "read"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No file uploaded. Use multipart form with field 'file'.")
+
+    file_bytes = await file.read()
+    filename = getattr(file, "filename", "upload.txt")
+
+    result = await do_ingest(
+        file_bytes, filename=filename, http_client=request.app.state.http_client,
+    )
+    return result
+
+
+# ── Medical History ─────────────────────────────────────────────
+
+
+@router.post("/skills/medical/tell")
+async def medical_tell(req: MedicalTellRequest, request: Request):
+    """Tell PAI about a medical event in natural language."""
+    from app.services.medical_service import process_medical_input
+    return await process_medical_input(req.text, http_client=request.app.state.http_client)
+
+
+@router.post("/skills/medical/record")
+async def add_medical_record(req: MedicalRecordRequest):
+    """Add a structured medical record directly."""
+    from app.services.medical_service import add_medical_record as add_record
+    record = await add_record(
+        family_member_id=req.family_member_id,
+        date=req.date,
+        category=req.category,
+        provider=req.provider,
+        summary=req.summary,
+        details=req.details,
+        follow_up=req.follow_up,
+        medications=req.medications,
+    )
+    return record
+
+
+@router.get("/skills/medical/records")
+async def list_medical_records(
+    family_member_id: int | None = None,
+    category: str | None = None,
+    limit: int = 50,
+):
+    """List medical records, optionally filtered."""
+    from app.services.medical_service import get_medical_records
+    records = await get_medical_records(
+        family_member_id=family_member_id, category=category, limit=limit,
+    )
+    return {"records": records}
+
+
+@router.get("/skills/medical/records/{record_id}")
+async def get_medical_record_detail(record_id: int):
+    """Get a specific medical record."""
+    from app.services.medical_service import get_medical_record
+    record = await get_medical_record(record_id)
+    if not record:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Medical record not found")
+    return record
+
+
+@router.delete("/skills/medical/records/{record_id}")
+async def remove_medical_record(record_id: int):
+    """Delete a medical record."""
+    from app.services.medical_service import delete_medical_record
+    deleted = await delete_medical_record(record_id)
+    if not deleted:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Medical record not found")
+    return {"deleted": True}
+
+
+@router.post("/skills/medical/upload/{record_id}")
+async def upload_medical_file(record_id: int, request: Request):
+    """Upload a file (PDF, image) and attach it to a medical record. Also ingests into semantic memory."""
+    from app.services.document_ingestion import ingest_file as do_ingest
+    from app.services.medical_service import attach_file_to_record, get_medical_record
+
+    rec = await get_medical_record(record_id)
+    if not rec:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Medical record not found")
+
+    form = await request.form()
+    file = form.get("file")
+    if not file or not hasattr(file, "read"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    file_bytes = await file.read()
+    filename = getattr(file, "filename", "upload.pdf")
+
+    # Ingest into semantic memory
+    ingest_result = await do_ingest(
+        file_bytes, filename=filename, http_client=request.app.state.http_client,
+    )
+
+    # Attach reference to medical record
+    attach = await attach_file_to_record(
+        record_id, filename, ingest_result.get("file_path", ""),
+    )
+
+    return {**ingest_result, **attach}
+
+
+# ── Recipes ─────────────────────────────────────────────────────
+
+
+@router.post("/skills/recipes")
+async def save_recipe(req: RecipeRequest):
+    """Save or update a recipe."""
+    from app.services.recipe_service import save_recipe as do_save
+    return await do_save(
+        title=req.title,
+        ingredients=req.ingredients,
+        instructions=req.instructions,
+        source=req.source,
+        source_url=req.source_url,
+        cuisine=req.cuisine,
+        prep_time_min=req.prep_time_min,
+        cook_time_min=req.cook_time_min,
+        servings=req.servings,
+        tags=req.tags,
+        notes=req.notes,
+    )
+
+
+@router.get("/skills/recipes")
+async def list_recipes(
+    search: str | None = None,
+    cuisine: str | None = None,
+    tag: str | None = None,
+    limit: int = 50,
+):
+    """Search/list saved recipes."""
+    from app.services.recipe_service import get_recipes
+    recipes = await get_recipes(search=search, cuisine=cuisine, tag=tag, limit=limit)
+    return {"recipes": recipes}
+
+
+@router.get("/skills/recipes/{recipe_id}")
+async def get_recipe_detail(recipe_id: int):
+    """Get a specific recipe."""
+    from app.services.recipe_service import get_recipe
+    recipe = await get_recipe(recipe_id)
+    if not recipe:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return recipe
+
+
+@router.post("/skills/recipes/{recipe_id}/rate")
+async def rate_recipe(recipe_id: int, req: RecipeRateRequest):
+    """Rate a recipe (1-5)."""
+    from app.services.recipe_service import rate_recipe as do_rate
+    result = await do_rate(recipe_id, req.rating)
+    if "error" in result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.delete("/skills/recipes/{recipe_id}")
+async def remove_recipe(recipe_id: int):
+    """Delete a recipe."""
+    from app.services.recipe_service import delete_recipe
+    deleted = await delete_recipe(recipe_id)
+    if not deleted:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return {"deleted": True}
+
+
+# ── Calendar / Events ───────────────────────────────────────────
+
+
+@router.post("/skills/calendar/tell")
+async def calendar_tell(req: CalendarTellRequest, request: Request):
+    """Tell PAI about an event in natural language."""
+    from app.services.calendar_service import process_calendar_input
+    return await process_calendar_input(req.text, http_client=request.app.state.http_client)
+
+
+@router.post("/skills/calendar/event")
+async def add_calendar_event(req: CalendarEventRequest):
+    """Add a structured calendar event."""
+    from app.services.calendar_service import add_event
+    return await add_event(
+        title=req.title,
+        event_date=req.event_date,
+        event_time=req.event_time,
+        end_time=req.end_time,
+        category=req.category,
+        family_member_name=req.family_member_name,
+        location=req.location,
+        recurrence=req.recurrence,
+        notes=req.notes,
+    )
+
+
+@router.get("/skills/calendar/events")
+async def list_calendar_events(
+    upcoming_days: int | None = None,
+    family_member_id: int | None = None,
+    category: str | None = None,
+    limit: int = 50,
+):
+    """List calendar events."""
+    from app.services.calendar_service import get_events
+    events = await get_events(
+        upcoming_days=upcoming_days, family_member_id=family_member_id,
+        category=category, limit=limit,
+    )
+    return {"events": events}
+
+
+@router.get("/skills/calendar/agenda")
+async def calendar_agenda(days: int = 7):
+    """Get upcoming agenda for the next N days."""
+    from app.services.calendar_service import get_agenda
+    return await get_agenda(days=days)
+
+
+@router.get("/skills/calendar/events/{event_id}")
+async def get_calendar_event(event_id: int):
+    """Get a specific event."""
+    from app.services.calendar_service import get_event
+    event = await get_event(event_id)
+    if not event:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
+
+
+@router.delete("/skills/calendar/events/{event_id}")
+async def remove_calendar_event(event_id: int):
+    """Delete a calendar event."""
+    from app.services.calendar_service import delete_event
+    deleted = await delete_event(event_id)
+    if not deleted:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"deleted": True}
+
+
+# ── Learning Loop ───────────────────────────────────────────────
+
+
+@router.post("/learning/generate")
+async def learning_generate(request: Request):
+    """Generate a candidate improvement based on quality data."""
+    from app.services.learning_service import generate_improvement
+    return await generate_improvement(http_client=request.app.state.http_client)
+
+
+@router.get("/learning/experiments")
+async def learning_list(status: str | None = None, limit: int = 20):
+    """List learning experiments."""
+    from app.services.learning_service import get_experiments
+    experiments = await get_experiments(status=status, limit=limit)
+    return {"experiments": experiments}
+
+
+@router.post("/learning/evaluate/{experiment_id}")
+async def learning_evaluate(experiment_id: str, request: Request):
+    """Evaluate a pending experiment against current quality stats."""
+    from app.services.learning_service import evaluate_experiment
+    return await evaluate_experiment(experiment_id, http_client=request.app.state.http_client)

@@ -208,3 +208,80 @@ class HomeDocumentRequest(BaseModel):
     doc_type: str = Field(default="manual", pattern=r"^(manual|warranty|receipt|notes|reference)$")
     home_item_id: int | None = None
     source: str = ""
+
+
+# ── Document Ingestion Schemas ──────────────────────────────────
+
+
+class IngestURLRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2000)
+
+
+class IngestTextRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    title: str = ""
+    source: str = ""
+
+
+# ── Medical History Schemas ─────────────────────────────────────
+
+
+class MedicalTellRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+
+
+class MedicalRecordRequest(BaseModel):
+    family_member_id: int
+    date: str = ""  # YYYY-MM-DD
+    category: str = Field(
+        default="other",
+        pattern=r"^(checkup|dental|vision|specialist|emergency|lab|vaccination|prescription|surgery|mental_health|other)$",
+    )
+    provider: str = ""
+    summary: str = Field(..., min_length=1)
+    details: str = ""
+    follow_up: str = ""
+    medications: list[str] = []
+
+
+# ── Recipe Schemas ──────────────────────────────────────────────
+
+
+class RecipeRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    ingredients: list[str] = []
+    instructions: list[str] = []
+    source: str = ""
+    source_url: str = ""
+    cuisine: str = ""
+    prep_time_min: int = 0
+    cook_time_min: int = 0
+    servings: int = 0
+    tags: list[str] = []
+    notes: str = ""
+
+
+class RecipeRateRequest(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+
+
+# ── Calendar Schemas ────────────────────────────────────────────
+
+
+class CalendarTellRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+
+
+class CalendarEventRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    event_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    event_time: str = ""
+    end_time: str = ""
+    category: str = Field(
+        default="other",
+        pattern=r"^(birthday|appointment|school|activity|holiday|travel|deadline|reminder|other)$",
+    )
+    family_member_name: str = "family"
+    location: str = ""
+    recurrence: str = Field(default="none", pattern=r"^(none|weekly|monthly|yearly)$")
+    notes: str = ""

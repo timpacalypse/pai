@@ -90,7 +90,7 @@ select:focus, input[type="text"]:focus {
 /* Mode buttons */
 .mode-buttons {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 6px;
 }
 

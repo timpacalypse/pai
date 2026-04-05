@@ -317,3 +317,92 @@ CREATE INDEX IF NOT EXISTS idx_quality_intent
 
 CREATE INDEX IF NOT EXISTS idx_quality_created
     ON quality_metrics (created_at);
+
+-- ── Sprint 8: Recipes ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS recipes (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    ingredients TEXT[] DEFAULT '{}',
+    instructions TEXT[] DEFAULT '{}',
+    source VARCHAR(255) DEFAULT '',        -- "family", "serious eats", etc.
+    source_url VARCHAR(500) DEFAULT '',
+    cuisine VARCHAR(100) DEFAULT '',
+    prep_time_min INTEGER DEFAULT 0,
+    cook_time_min INTEGER DEFAULT 0,
+    servings INTEGER DEFAULT 0,
+    tags TEXT[] DEFAULT '{}',
+    notes TEXT DEFAULT '',
+    family_rating INTEGER CHECK (family_rating IS NULL OR family_rating BETWEEN 1 AND 5),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_title_lower
+    ON recipes (LOWER(title));
+
+-- ── Sprint 8: Medical Records ──────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS medical_records (
+    id SERIAL PRIMARY KEY,
+    family_member_id INTEGER NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
+    record_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    category VARCHAR(50) DEFAULT 'other',  -- checkup, dental, vision, specialist, emergency, lab, vaccination, prescription, surgery, mental_health, other
+    provider VARCHAR(255) DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    details TEXT DEFAULT '',
+    follow_up TEXT DEFAULT '',
+    medications TEXT[] DEFAULT '{}',
+    vitals JSONB DEFAULT '{}',
+    file_references JSONB DEFAULT '[]',    -- [{filename, path}]
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_medical_member
+    ON medical_records (family_member_id);
+
+CREATE INDEX IF NOT EXISTS idx_medical_date
+    ON medical_records (record_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_medical_category
+    ON medical_records (category);
+
+-- ── Sprint 8: Family Events / Calendar ─────────────────────────
+
+CREATE TABLE IF NOT EXISTS family_events (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(500) NOT NULL,
+    event_date DATE NOT NULL,
+    event_time VARCHAR(10) DEFAULT '',     -- HH:MM
+    end_time VARCHAR(10) DEFAULT '',
+    category VARCHAR(50) DEFAULT 'other',  -- birthday, appointment, school, activity, holiday, travel, deadline, reminder, other
+    family_member_id INTEGER REFERENCES family_members(id) ON DELETE SET NULL,
+    family_member_name VARCHAR(100) DEFAULT 'family',
+    location VARCHAR(500) DEFAULT '',
+    recurrence VARCHAR(20) DEFAULT 'none', -- none, weekly, monthly, yearly
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_date
+    ON family_events (event_date);
+
+CREATE INDEX IF NOT EXISTS idx_events_member
+    ON family_events (family_member_id);
+
+-- ── Sprint 8: Learning Experiments ─────────────────────────────
+
+CREATE TABLE IF NOT EXISTS learning_experiments (
+    id SERIAL PRIMARY KEY,
+    experiment_id VARCHAR(64) NOT NULL UNIQUE,
+    improvement JSONB NOT NULL,
+    baseline_stats JSONB DEFAULT '[]',
+    result_stats JSONB DEFAULT '[]',
+    status VARCHAR(20) DEFAULT 'pending',  -- pending, promoted, rejected, inconclusive
+    verdict TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    evaluated_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiments_status
+    ON learning_experiments (status);
