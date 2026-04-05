@@ -286,6 +286,37 @@ async def chat(req: ChatRequest, request: Request):
         inferred_primary, inferred_secondary = infer_roles(req.message)
         roles = await resolve_roles(inferred_primary, inferred_secondary)
 
+    # ── Check for briefing intent ──
+    lower_msg = req.message.lower()
+    briefing_triggers = [
+        "daily briefing", "morning briefing", "give me my briefing",
+        "send my briefing", "today's briefing", "today's brief",
+        "my briefing", "run briefing", "what's my day look like",
+        "what does my day look like", "brief me", "daily brief",
+    ]
+    if any(t in lower_msg for t in briefing_triggers):
+        content = await _handle_briefing_chat(request, req.message)
+        duration_ms = (time.perf_counter() - start) * 1000
+        from app.memory.episodic import log_chat_turn
+        await log_chat_turn(
+            conversation_id=str(req.conversation_id),
+            role=roles.primary.role.value,
+            user_message=req.message,
+            assistant_message=content,
+            domain=roles.primary.domain.value,
+            duration_ms=round(duration_ms, 2),
+        )
+        return ChatResponse(
+            request_id=req.request_id,
+            conversation_id=req.conversation_id,
+            role=roles.primary.role.value,
+            secondary_role=roles.secondary.role.value if roles.secondary else None,
+            domain=roles.primary.domain.value,
+            content=content,
+            intent="briefing",
+            duration_ms=round(duration_ms, 2),
+        )
+
     from app.services.prompt_service import build_chat_prompt
     system_prompt = build_chat_prompt(roles)
 
@@ -367,6 +398,34 @@ async def chat_conversations(limit: int = 20):
     from app.memory.episodic import list_conversations
     convos = await list_conversations(limit=limit)
     return {"conversations": convos}
+
+
+async def _handle_briefing_chat(request, user_message: str) -> str:
+    """Build daily briefing data and have the LLM format it conversationally."""
+    from app.services.briefing_service import build_daily_briefing, build_briefing_text
+
+    briefing = await build_daily_briefing(http_client=request.app.state.http_client)
+    briefing_text = build_briefing_text(briefing)
+
+    system_prompt = (
+        "You are PAI — a Personal AI assistant delivering a daily briefing.\n"
+        "Present the briefing data below in a clear, conversational format.\n"
+        "Use sections with headers. Be concise but complete.\n"
+        "Do NOT invent data — only report what's provided.\n"
+        "Respond in natural language, NOT JSON."
+    )
+    user_prompt = (
+        f"The user asked: \"{user_message}\"\n\n"
+        f"Here is today's briefing data:\n\n{briefing_text}\n\n"
+        "Present this as my daily briefing."
+    )
+
+    content = await generate(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        http_client=request.app.state.http_client,
+    )
+    return content
 
 
 async def _gather_skill_context(message: str) -> list[str]:
