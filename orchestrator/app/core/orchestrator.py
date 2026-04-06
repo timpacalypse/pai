@@ -11,7 +11,7 @@ from app.services.ollama_service import generate, select_model
 from app.services.prompt_service import build_system_prompt
 from app.services.intent_service import classify_intent
 from app.services.workflow_service import route_workflow, WorkflowType, select_agents_for_task
-from app.services.role_inference import infer_roles
+from app.services.llm_intent_service import classify_chat_intent
 from app.agents.base import AgentInput, AgentOutput
 from app.agents.research import ResearchAgent
 from app.agents.analysis import AnalysisAgent
@@ -249,12 +249,12 @@ async def handle_task(
     # 1. Classify intent
     intent = classify_intent(request.input)
 
-    # 2. Resolve roles — auto-infer if not explicitly set
+    # 2. Resolve roles — LLM-inferred if not explicitly set
     if request.role:
         roles = await resolve_roles(request.role, request.secondary_role)
     else:
-        inferred_primary, inferred_secondary = infer_roles(request.input)
-        roles = await resolve_roles(inferred_primary, inferred_secondary)
+        classification = await classify_chat_intent(request.input, http_client)
+        roles = await resolve_roles(classification["role"], None)
 
     # 3. Smart agent selection based on prompt + intent
     #    Check procedural memory first for proven patterns
@@ -436,8 +436,8 @@ async def handle_competition(
     if request.role:
         roles = await resolve_roles(request.role, request.secondary_role)
     else:
-        inferred_primary, inferred_secondary = infer_roles(request.input)
-        roles = await resolve_roles(inferred_primary, inferred_secondary)
+        classification = await classify_chat_intent(request.input, http_client)
+        roles = await resolve_roles(classification["role"], None)
 
     model = select_model(request.input)
 

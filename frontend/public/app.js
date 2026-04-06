@@ -86,6 +86,7 @@ async function init() {
 
     // Medical mode buttons
     document.getElementById('medical-records-btn').addEventListener('click', loadMedicalRecords);
+    document.getElementById('medical-upload').addEventListener('change', handleMedicalUpload);
 
     // Recipes mode buttons
     document.getElementById('recipes-list-btn').addEventListener('click', loadRecipes);
@@ -102,6 +103,7 @@ async function init() {
     document.getElementById('home-items-btn').addEventListener('click', loadHomeItems);
     document.getElementById('home-alerts-btn').addEventListener('click', checkHomeAlerts);
     document.getElementById('home-docs-btn').addEventListener('click', searchHomeDocs);
+    document.getElementById('home-upload').addEventListener('change', handleHomeUpload);
 
     addSystemMessage('Welcome to PAI. Your roles and agents are auto-selected from your prompt. Override with the dropdowns if needed.');
 
@@ -824,6 +826,63 @@ async function loadMedicalRecords() {
     } catch (e) {
         loadingEl.remove();
         addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function handleMedicalUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+
+    const loadingEl = addLoading();
+    try {
+        // First ingest the file into semantic memory
+        const formData = new FormData();
+        formData.append('file', file);
+        const resp = await fetch(`${API}/skills/ingest/file`, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        loadingEl.remove();
+        const chunks = data.chunks_stored || 0;
+        addMessage(
+            `Uploaded and ingested "${file.name}" — ${chunks} chunks stored in semantic memory. ` +
+            `You can now ask questions about this document in chat.`,
+            'ai', 'medical'
+        );
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Upload error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function handleHomeUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+
+    const loadingEl = addLoading();
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const resp = await fetch(`${API}/skills/ingest/file`, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        loadingEl.remove();
+        const chunks = data.chunks_stored || 0;
+        addMessage(
+            `Uploaded and ingested "${file.name}" — ${chunks} chunks stored in semantic memory. ` +
+            `You can now ask questions about this document in chat.`,
+            'ai', 'home'
+        );
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Upload error: ${e.message}`, 'ai', 'error');
     }
 }
 

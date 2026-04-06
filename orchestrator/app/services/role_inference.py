@@ -22,11 +22,18 @@ _DOMAIN_KEYWORDS: dict[DomainType, list[str]] = {
         "longevity", "bodybuilding", "physique", "muscle", "cardio", "weight",
         "meal", "recipe", "cook", "food", "dinner", "lunch", "breakfast",
         "ingredient", "kitchen", "menu",
+        "medical", "doctor", "prescription", "medication", "dentist", "checkup",
+        "colonoscopy", "surgery", "diagnosis", "vaccine", "lab", "blood",
+        "home", "house", "hvac", "appliance", "maintenance", "repair",
+        "plumbing", "furnace", "water heater", "air filter", "roof",
+        "serviced", "replaced", "installed", "garage", "lake anna",
     ],
     DomainType.family: [
         "family", "kids", "children", "son", "daughter", "wife", "parenting",
         "school", "homework", "activity", "weekend", "trip", "vacation",
         "schedule", "birthday", "chore",
+        "medical record", "health record", "appointment", "pediatrician",
+        "allergy", "allergies", "dentist appointment",
     ],
     DomainType.intellectual_growth: [
         "learn", "study", "understand", "philosophy", "science", "history",
@@ -75,15 +82,22 @@ _ROLE_KEYWORDS: dict[RoleType, list[str]] = {
     ],
     RoleType.family_chef: [
         "recipe", "cook", "meal plan", "dinner", "food", "ingredient",
-        "kitchen", "nutrition", "menu",
+        "kitchen", "nutrition", "menu", "grocery", "snack", "bake",
     ],
     RoleType.family_activity_coordinator: [
         "activity", "schedule", "trip", "vacation", "event", "outing",
         "weekend plan", "coordinate", "logistics",
+        "home database", "house", "hvac", "appliance", "maintenance",
+        "repair", "serviced", "replaced", "installed", "home",
+        "plumbing", "furnace", "water heater", "garage", "lake anna",
     ],
     RoleType.parent: [
         "parent", "child", "kid", "son", "daughter", "school", "homework",
         "behavior", "discipline", "development", "teenager",
+        "medical record", "doctor", "dentist", "checkup", "colonoscopy",
+        "prescription", "medication", "vaccine", "surgery", "diagnosis",
+        "health record", "lab result", "blood work", "appointment",
+        "pediatrician", "allergy", "allergies",
     ],
     RoleType.polymath_in_training: [
         "polymath", "interdisciplinary", "cross-domain", "curiosity",

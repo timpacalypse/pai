@@ -81,6 +81,10 @@
 
             <div id="medical-options" class="sidebar-section hidden">
                 <button id="medical-records-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">View Records</button>
+                <label class="upload-btn secondary-btn" style="width:100%;margin-bottom:8px;display:block;text-align:center;cursor:pointer">
+                    Upload Medical PDF
+                    <input type="file" id="medical-upload" accept=".pdf,.jpg,.jpeg,.png" style="display:none">
+                </label>
             </div>
 
             <div id="recipes-options" class="sidebar-section hidden">
@@ -95,7 +99,11 @@
             <div id="home-options" class="sidebar-section hidden">
                 <button id="home-items-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">View Items &amp; Tasks</button>
                 <button id="home-alerts-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Check Alerts</button>
-                <button id="home-docs-btn" class="secondary-btn" style="width:100%">Search Documents</button>
+                <button id="home-docs-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Search Documents</button>
+                <label class="upload-btn secondary-btn" style="width:100%;display:block;text-align:center;cursor:pointer">
+                    Upload Home Document
+                    <input type="file" id="home-upload" accept=".pdf,.txt,.md,.html" style="display:none">
+                </label>
             </div>
 
             <div class="sidebar-footer">

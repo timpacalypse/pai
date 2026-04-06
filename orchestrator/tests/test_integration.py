@@ -43,8 +43,12 @@ def test_task_default_role(client):
     resp = client.post("/task", json={"input": "Say hello"})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["role"] == "cybersecurity_executive"
-    assert data["domain"] == "professional"
+    # LLM-inferred role — any valid role is acceptable for a generic greeting
+    assert data["role"] in (
+        "cybersecurity_executive", "polymath_in_training", "educator_scholar",
+        "parent", "family_activity_coordinator",
+    )
+    assert data["domain"] in ("professional", "intellectual_growth", "family", "personal")
 
 
 def test_task_parent_role(client):
@@ -1633,7 +1637,7 @@ def test_planning_gets_critic_pass(client):
     """Planning workflow should get automatic critic pass."""
     resp = client.post("/task", json={
         "input": "Create a step-by-step plan for implementing AI governance in a mid-size company"
-    }, timeout=120.0)
+    })
     assert resp.status_code == 200
     data = resp.json()
     assert data["workflow"] in ("agent_planning", "multi_agent_competition")
@@ -1670,3 +1674,50 @@ def test_chat_nl_briefing_trigger(client):
     data = resp.json()
     assert data["intent"] == "briefing"
     assert data["content"]
+
+
+# ── Sprint 10b: Chat skill mutation routing ────────────────────
+
+
+def test_chat_routes_medical_to_skill(client):
+    """Chat should detect medical mutation intent and route to medical service."""
+    resp = client.post("/chat", json={
+        "message": "add to medical records that tim had a physical exam on 4/1 with normal results"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "medical_record"
+    assert data["role"] != "proposal_strategist"  # should NOT pick professional roles
+    assert data["content"]
+
+
+def test_chat_routes_home_to_skill(client):
+    """Chat should detect home maintenance intent and route to home service."""
+    resp = client.post("/chat", json={
+        "message": "add to home database that the furnace was serviced on 3/30"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "home_record"
+    assert data["role"] != "cybersecurity_executive"  # should NOT pick professional roles
+    assert data["content"]
+
+
+def test_chat_medical_role_inference(client):
+    """Medical inputs should infer personal/family roles, not professional."""
+    resp = client.post("/chat", json={
+        "message": "record that sarah had a dentist appointment on 4/2"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["domain"] in ("personal", "family")
+
+
+def test_chat_home_role_inference(client):
+    """Home inputs should infer family/personal roles, not professional."""
+    resp = client.post("/chat", json={
+        "message": "log hvac filter replacement at the lake anna house"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["domain"] in ("personal", "family")

@@ -19,7 +19,6 @@ from app.core.orchestrator import handle_task, handle_competition
 from app.core.config import settings
 from app.memory.episodic import log_episodic
 from app.services.role_service import get_all_roles, resolve_roles
-from app.services.role_inference import infer_roles
 from app.services.web_search_service import search_and_extract
 from app.services.content_ranker import rank_articles
 from app.services.article_dedup import mark_article_seen, filter_new_articles, get_ledger_stats
@@ -276,47 +275,45 @@ async def send_digest_now(min_score: float = 0.0, days: int = 7):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
-    """Conversational endpoint with role-awareness, RAG, and skill-aware context."""
+    """Conversational endpoint with LLM-based intent classification, role inference, and skill routing."""
     start = time.perf_counter()
+    http_client = request.app.state.http_client
 
-    # Auto-infer roles if not explicitly set
+    # ── Step 1: LLM-based intent + role classification (single fast call) ──
     if req.role:
+        # Explicit role provided — skip LLM classification for role, still classify intent
+        from app.services.llm_intent_service import classify_chat_intent
+        classification = await classify_chat_intent(req.message, http_client)
         roles = await resolve_roles(req.role, req.secondary_role)
     else:
-        inferred_primary, inferred_secondary = infer_roles(req.message)
-        roles = await resolve_roles(inferred_primary, inferred_secondary)
+        from app.services.llm_intent_service import classify_chat_intent
+        classification = await classify_chat_intent(req.message, http_client)
+        roles = await resolve_roles(classification["role"], None)
 
-    # ── Check for briefing intent ──
-    lower_msg = req.message.lower()
-    briefing_triggers = [
-        "daily briefing", "morning briefing", "give me my briefing",
-        "send my briefing", "today's briefing", "today's brief",
-        "my briefing", "run briefing", "what's my day look like",
-        "what does my day look like", "brief me", "daily brief",
-    ]
-    if any(t in lower_msg for t in briefing_triggers):
+    intent = classification["intent"]
+    skill_context_types = classification["skill_context"]
+
+    # ── Step 2: Route based on classified intent ──
+
+    # Briefing intent
+    if intent == "briefing":
         content = await _handle_briefing_chat(request, req.message)
-        duration_ms = (time.perf_counter() - start) * 1000
-        from app.memory.episodic import log_chat_turn
-        await log_chat_turn(
-            conversation_id=str(req.conversation_id),
-            role=roles.primary.role.value,
-            user_message=req.message,
-            assistant_message=content,
-            domain=roles.primary.domain.value,
-            duration_ms=round(duration_ms, 2),
-        )
-        return ChatResponse(
-            request_id=req.request_id,
-            conversation_id=req.conversation_id,
-            role=roles.primary.role.value,
-            secondary_role=roles.secondary.role.value if roles.secondary else None,
-            domain=roles.primary.domain.value,
-            content=content,
-            intent="briefing",
-            duration_ms=round(duration_ms, 2),
-        )
+        return _build_chat_response(req, roles, content, "briefing", start)
 
+    # Skill mutation intents — route to actual skill services
+    if intent == "medical_record":
+        content = await _handle_skill_mutation("medical", req.message, http_client)
+        return _build_chat_response(req, roles, content, "medical_record", start)
+
+    if intent == "home_record":
+        content = await _handle_skill_mutation("home", req.message, http_client)
+        return _build_chat_response(req, roles, content, "home_record", start)
+
+    if intent == "calendar_event":
+        content = await _handle_skill_mutation("calendar", req.message, http_client)
+        return _build_chat_response(req, roles, content, "calendar_event", start)
+
+    # ── Step 3: Conversation — build context and generate response ──
     from app.services.prompt_service import build_chat_prompt
     system_prompt = build_chat_prompt(roles)
 
@@ -324,7 +321,7 @@ async def chat(req: ChatRequest, request: Request):
     if req.history:
         history_block = "\n".join(
             f"{'User' if m.role_name == 'user' else 'Assistant'}: {m.content}"
-            for m in req.history[-10:]  # last 10 messages max
+            for m in req.history[-10:]
         )
         user_prompt = f"Conversation so far:\n{history_block}\n\nUser: {req.message}"
     else:
@@ -332,11 +329,11 @@ async def chat(req: ChatRequest, request: Request):
 
     # ── RAG: retrieve from semantic memory ──
     from app.memory.semantic import search_semantic
-    rag_results = await search_semantic(req.message, limit=3, http_client=request.app.state.http_client)
+    rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
     rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
 
-    # ── Skill-aware context: query home KB and meal data when relevant ──
-    skill_context = await _gather_skill_context(req.message)
+    # ── Skill context: LLM-directed (only query what the classifier says is relevant) ──
+    skill_context = await _gather_skill_context_by_type(skill_context_types)
 
     # Assemble augmented prompt
     context_parts = []
@@ -357,21 +354,29 @@ async def chat(req: ChatRequest, request: Request):
         prompt=user_prompt,
         system_prompt=system_prompt,
         model=model,
-        http_client=request.app.state.http_client,
+        http_client=http_client,
     )
 
+    return _build_chat_response(req, roles, content, intent, start)
+
+
+def _build_chat_response(req, roles, content: str, intent: str, start: float) -> ChatResponse:
+    """Build a ChatResponse and log the turn to episodic memory."""
+    import asyncio
     duration_ms = (time.perf_counter() - start) * 1000
 
-    # Persist chat turn to episodic memory
-    from app.memory.episodic import log_chat_turn
-    await log_chat_turn(
-        conversation_id=str(req.conversation_id),
-        role=roles.primary.role.value,
-        user_message=req.message,
-        assistant_message=content,
-        domain=roles.primary.domain.value,
-        duration_ms=round(duration_ms, 2),
-    )
+    # Fire-and-forget log (don't block response)
+    async def _log():
+        from app.memory.episodic import log_chat_turn
+        await log_chat_turn(
+            conversation_id=str(req.conversation_id),
+            role=roles.primary.role.value,
+            user_message=req.message,
+            assistant_message=content,
+            domain=roles.primary.domain.value,
+            duration_ms=round(duration_ms, 2),
+        )
+    asyncio.create_task(_log())
 
     return ChatResponse(
         request_id=req.request_id,
@@ -380,8 +385,41 @@ async def chat(req: ChatRequest, request: Request):
         secondary_role=roles.secondary.role.value if roles.secondary else None,
         domain=roles.primary.domain.value,
         content=content,
+        intent=intent,
         duration_ms=round(duration_ms, 2),
     )
+
+
+async def _handle_skill_mutation(skill: str, message: str, http_client) -> str:
+    """Route a mutation intent to the appropriate skill service and return a human-readable response."""
+    try:
+        if skill == "medical":
+            from app.services.medical_service import process_medical_input
+            result = await process_medical_input(message, http_client=http_client)
+            if result.get("error"):
+                return f"I tried to save that medical record but ran into an issue: {result['error']}"
+            actions = result.get("actions", [])
+            return " | ".join(actions) if actions else f"Recorded medical entry for {result.get('family_member', 'unknown')}."
+
+        elif skill == "home":
+            from app.services.home_knowledge_service import process_natural_input
+            result = await process_natural_input(user_text=message, http_client=http_client)
+            if result.get("error"):
+                return f"I tried to save that home record but ran into an issue: {result['error']}"
+            actions = result.get("actions", [])
+            return " | ".join(actions) if actions else "Saved to the home database."
+
+        elif skill == "calendar":
+            from app.services.calendar_service import process_calendar_input
+            result = await process_calendar_input(message, http_client=http_client)
+            if result.get("error"):
+                return f"I tried to add that to the calendar but ran into an issue: {result['error']}"
+            actions = result.get("actions", [])
+            return " | ".join(actions) if actions else "Added to calendar."
+
+    except Exception as e:
+        return f"Sorry, I couldn't process that {skill} request: {e}"
+    return "I wasn't sure how to handle that request."
 
 
 @router.get("/chat/history")
@@ -540,6 +578,162 @@ async def _gather_skill_context(message: str) -> list[str]:
             pass
 
     return context
+
+
+async def _gather_skill_context_by_type(context_types: list[str]) -> list[str]:
+    """Query skill data sources based on LLM-classified context types."""
+    context = []
+
+    if "home" in context_types:
+        try:
+            from app.services.home_knowledge_service import get_alerts, get_home_tasks
+            alerts = await get_alerts()
+            if alerts["overdue"]:
+                overdue_strs = [f"OVERDUE: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
+                                for t in alerts["overdue"]]
+                context.append("Home maintenance overdue:\n" + "\n".join(overdue_strs))
+            if alerts["upcoming"]:
+                upcoming_strs = [f"Upcoming: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
+                                 for t in alerts["upcoming"]]
+                context.append("Home maintenance upcoming:\n" + "\n".join(upcoming_strs))
+            all_tasks = await get_home_tasks()
+            if all_tasks:
+                task_strs = [f"{t['item_name']}: {t['description']} — status: {t.get('status','ok')}, "
+                             f"next due: {t.get('next_due_at', 'N/A')}"
+                             for t in all_tasks[:5]]
+                context.append("Home maintenance tasks:\n" + "\n".join(task_strs))
+        except Exception:
+            pass
+
+    if "meals" in context_types:
+        try:
+            from app.services.family_preference_service import build_preference_context
+            from app.services.meal_planner import get_meal_plans
+            prefs = await build_preference_context()
+            if prefs and "No family members" not in prefs:
+                context.append(prefs)
+            recent_plans = await get_meal_plans(limit=1)
+            if recent_plans:
+                plan = recent_plans[0]
+                week = plan.get("plan", {}).get("week", [])
+                if week:
+                    dinners = [f"{d.get('day','')}: {d.get('dinner','?')}" for d in week if isinstance(d, dict)]
+                    context.append(f"Latest meal plan ({plan.get('week_label','')}):\n" + "\n".join(dinners))
+        except Exception:
+            pass
+
+    if "recipes" in context_types:
+        try:
+            from app.services.recipe_service import build_recipe_context
+            recipe_ctx = await build_recipe_context(search="")
+            if recipe_ctx:
+                context.append(recipe_ctx)
+        except Exception:
+            pass
+
+    if "medical" in context_types:
+        try:
+            from app.services.medical_service import build_medical_context
+            med_ctx = await build_medical_context()
+            if med_ctx:
+                context.append(med_ctx)
+        except Exception:
+            pass
+
+    if "calendar" in context_types:
+        try:
+            from app.services.calendar_service import build_calendar_context
+            cal_ctx = await build_calendar_context(days=14)
+            if cal_ctx:
+                context.append(cal_ctx)
+        except Exception:
+            pass
+
+    return context
+
+
+async def _detect_and_route_skill_action(
+    lower_msg: str, original_msg: str, request
+) -> tuple[str, str] | None:
+    """Detect if a chat message is trying to mutate skill data (add/update/log).
+
+    Returns (intent_type, response_text) if a skill action was executed, else None.
+    """
+    # Action verbs that signal mutation intent
+    action_verbs = [
+        "add ", "record ", "log ", "save ", "store ", "update ", "track ",
+        "create ", "set ", "note ", "put ", "enter ", "register ",
+        "add to ", "added to ", "mark ", "schedule ",
+    ]
+    has_action = any(lower_msg.startswith(v) or f" {v}" in f" {lower_msg}" for v in action_verbs)
+    if not has_action:
+        return None
+
+    # Medical signals
+    medical_signals = [
+        "medical record", "medical", "doctor", "prescription", "medication",
+        "colonoscopy", "surgery", "diagnosis", "lab result", "blood work",
+        "checkup", "dentist", "physical", "vaccine", "vaccination",
+        "health record", "specialist", "procedure", "appointment",
+        "therapy", "screening", "x-ray", "mri", "ct scan", "ultrasound",
+    ]
+    if any(s in lower_msg for s in medical_signals):
+        try:
+            from app.services.medical_service import process_medical_input
+            result = await process_medical_input(
+                original_msg, http_client=request.app.state.http_client,
+            )
+            if result.get("error"):
+                return ("medical_record", f"I tried to save that medical record but ran into an issue: {result['error']}")
+            actions = result.get("actions", [])
+            content = " | ".join(actions) if actions else f"Recorded medical entry for {result.get('family_member', 'unknown')}."
+            return ("medical_record", content)
+        except Exception as e:
+            return ("medical_record", f"Sorry, I couldn't save that medical record: {e}")
+
+    # Home signals
+    home_signals = [
+        "home database", "home", "house", "hvac", "appliance", "maintenance",
+        "plumbing", "furnace", "water heater", "air filter", "roof",
+        "garage", "washer", "dryer", "dishwasher", "refrigerator", "oven",
+        "lake anna", "townhouse", "condo",
+        "serviced", "repaired", "replaced", "installed", "fixed",
+    ]
+    if any(s in lower_msg for s in home_signals):
+        try:
+            from app.services.home_knowledge_service import process_natural_input
+            result = await process_natural_input(
+                user_text=original_msg,
+                http_client=request.app.state.http_client,
+            )
+            if result.get("error"):
+                return ("home_record", f"I tried to save that home record but ran into an issue: {result['error']}")
+            actions = result.get("actions", [])
+            content = " | ".join(actions) if actions else "Saved to the home database."
+            return ("home_record", content)
+        except Exception as e:
+            return ("home_record", f"Sorry, I couldn't save that to the home database: {e}")
+
+    # Calendar signals
+    calendar_signals = [
+        "calendar", "event", "appointment", "birthday", "anniversary",
+        "reminder", "meeting",
+    ]
+    if any(s in lower_msg for s in calendar_signals):
+        try:
+            from app.services.calendar_service import process_calendar_input
+            result = await process_calendar_input(
+                original_msg, http_client=request.app.state.http_client,
+            )
+            if result.get("error"):
+                return ("calendar_event", f"I tried to add that to the calendar but ran into an issue: {result['error']}")
+            actions = result.get("actions", [])
+            content = " | ".join(actions) if actions else "Added to calendar."
+            return ("calendar_event", content)
+        except Exception as e:
+            return ("calendar_event", f"Sorry, I couldn't add that to the calendar: {e}")
+
+    return None
 
 
 # ── Meal Planning Endpoints ────────────────────────────────────
