@@ -425,6 +425,65 @@ def register_all_skills():
         category="professional",
     ))
 
+    # ── Family Health Check ──
+    async def _health_check_read(message, http_client=None):
+        from app.services.health_check_service import build_health_check_text
+        return await build_health_check_text(http_client=http_client)
+
+    async def _health_check_write(message, http_client=None):
+        from app.services.health_check_service import build_health_check_text
+        from app.services.process_engine import _skill_email_send
+        from app.core.config import settings
+        report = await build_health_check_text(http_client=http_client)
+        if report.startswith("No family members") or report.startswith("Error"):
+            return report
+        try:
+            await _skill_email_send({
+                "to": [settings.gmail_address],
+                "subject": "PAI Family Health Check Report",
+                "body": report,
+            })
+            return report + "\n\n✉ Report emailed."
+        except Exception as e:
+            logger.warning("health_check_email_failed", extra={"error": str(e)})
+            return report + f"\n\n(Email failed: {e})"
+
+    register_skill(Skill(
+        id="health_check",
+        name="Family Health Check",
+        description="Review medications, refill dates, overdue appointments, immunization status, and drug interactions for all family members; optionally email the report",
+        examples=["run a family health check", "any overdue appointments", "check medication interactions", "health check report"],
+        read_handler=_health_check_read,
+        write_handler=_health_check_write,
+        category="family",
+    ))
+
+    # ── Article Curation ──
+    async def _article_curation_read(message, http_client=None):
+        from app.services.article_curation_service import curate_articles_text
+        return await curate_articles_text()
+
+    async def _article_curation_write(message, http_client=None):
+        from app.services.article_curation_service import curate_articles_text
+        # Parse custom topics from message if present
+        topics = None
+        lower = message.lower()
+        if "about " in lower:
+            custom_topic = message.split("about ", 1)[1].strip()
+            if custom_topic:
+                topics = [custom_topic]
+        return await curate_articles_text(topics=topics)
+
+    register_skill(Skill(
+        id="article_curation",
+        name="Article Curation",
+        description="Curate top articles from the web, score them for relevance, and suggest LinkedIn thought leadership angles; supports custom topics",
+        examples=["curate articles", "find articles about AI governance", "what are the top articles this week", "curate content for LinkedIn"],
+        read_handler=_article_curation_read,
+        write_handler=_article_curation_write,
+        category="professional",
+    ))
+
     # ── Memory ──
     async def _memory_read(message, http_client=None):
         from app.memory.semantic import search_semantic

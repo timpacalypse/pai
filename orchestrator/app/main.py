@@ -14,7 +14,6 @@ from app.core.middleware import RequestLoggingMiddleware
 from app.api.routes import router
 from app.services.role_service import load_roles
 from app.services.scheduler import scheduler_loop
-from app.services.meal_scheduler import meal_scheduler_loop
 from app.services.home_alert_scheduler import home_alert_scheduler_loop
 from app.services.briefing_scheduler import briefing_scheduler_loop
 from app.services.autonomous_scheduler import autonomous_scheduler_loop
@@ -54,9 +53,6 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler_loop())
     app.state.scheduler_task = scheduler_task
 
-    meal_task = asyncio.create_task(meal_scheduler_loop())
-    app.state.meal_scheduler_task = meal_task
-
     home_alert_task = asyncio.create_task(home_alert_scheduler_loop())
     app.state.home_alert_task = home_alert_task
 
@@ -69,7 +65,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    for task in (scheduler_task, meal_task, home_alert_task, briefing_task, autonomous_task):
+    for task in (scheduler_task, home_alert_task, briefing_task, autonomous_task):
         task.cancel()
         try:
             await task

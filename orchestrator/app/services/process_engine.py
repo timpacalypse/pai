@@ -1080,7 +1080,7 @@ THREAT_INTEL_DIGEST_DEFINITION = {
              "threats": "steps.analyze.threat_analysis",
              "task": "Based on the threat analysis, create a prioritized action plan. For critical/high threats, identify immediate mitigations. For medium threats, identify monitoring actions. Produce a concise executive-level digest suitable for email.",
          },
-         "outputs": ["action_plan", "digest_text"]},
+         "outputs": ["digest_text"]},
         {"id": "store_results", "type": "skill", "name": "Store analysis in memory",
          "skill_id": "memory_store",
          "inputs": {"content": "steps.plan_response.digest_text", "category": "threat_intel"},
@@ -1133,10 +1133,10 @@ FITNESS_HEALTH_REVIEW_DEFINITION = {
              "preferences": "steps.get_meals.preferences",
              "task": "Based on the health analysis, create specific actionable recommendations for next week: 1) Nutrition adjustments (meals to add/avoid), 2) Exercise recommendations (type, frequency, duration), 3) Health habits to start/stop, 4) Follow-up items for medical care. Keep it practical and sustainable. Format as a clear email summary.",
          },
-         "outputs": ["weekly_plan", "email_body"]},
+         "outputs": ["email_body"]},
         {"id": "store", "type": "skill", "name": "Store analysis in memory",
          "skill_id": "memory_store",
-         "inputs": {"content": "steps.plan_adjustments.weekly_plan", "category": "health_review"},
+         "inputs": {"content": "steps.plan_adjustments.email_body", "category": "health_review"},
          "outputs": ["stored"]},
         {"id": "send_review", "type": "skill", "name": "Email weekly review",
          "skill_id": "email_send",
@@ -1181,10 +1181,10 @@ HOME_MAINTENANCE_AUDIT_DEFINITION = {
              "diy_guides": "steps.research_fixes.search_results",
              "task": "Create a prioritized home maintenance action plan. For each item: 1) Priority (urgent/soon/routine), 2) Estimated time to complete, 3) DIY vs professional recommendation, 4) Estimated cost range. Group by property (if multiple homes). Format as a clear email with an actionable checklist.",
          },
-         "outputs": ["action_plan", "email_body"]},
+         "outputs": ["email_body"]},
         {"id": "store", "type": "skill", "name": "Store audit in memory",
          "skill_id": "memory_store",
-         "inputs": {"content": "steps.plan_actions.action_plan", "category": "home_audit"},
+         "inputs": {"content": "steps.plan_actions.email_body", "category": "home_audit"},
          "outputs": ["stored"]},
         {"id": "send_audit", "type": "skill", "name": "Email audit report",
          "skill_id": "email_send",
@@ -1238,9 +1238,8 @@ LEARNING_PATH_DEFINITION = {
              "existing_knowledge": "steps.check_existing.memory_results",
              "task": "Design a structured learning path with: 1) Phases (foundation → intermediate → advanced → synthesis), 2) Specific resources per phase with time estimates, 3) Milestones and self-assessment checkpoints, 4) Cross-domain connections to other knowledge areas, 5) Weekly time commitment recommendation. Make it progressive and sustainable.",
          },
-         "outputs": ["curriculum", "summary"]},
+         "outputs": ["curriculum"]},
         {"id": "gate_review", "type": "gate", "name": "Review curriculum before saving",
-         "gate_message": "Review the learning path before it's saved to memory",
          "inputs": {"curriculum": "steps.build_curriculum.curriculum"}},
         {"id": "store_curriculum", "type": "skill", "name": "Save to semantic memory",
          "skill_id": "memory_store",
@@ -1251,7 +1250,7 @@ LEARNING_PATH_DEFINITION = {
          "inputs": {
              "to": ["mclaurint@gmail.com"],
              "subject": "PAI Learning Path: New Curriculum",
-             "body": "steps.build_curriculum.summary",
+             "body": "steps.build_curriculum.curriculum",
          },
          "outputs": ["send_confirmation"]},
     ],
@@ -1268,9 +1267,12 @@ _SEED_DEFINITIONS = [
 
 
 async def seed_process_definitions() -> None:
-    """Seed built-in process definitions if they don't exist."""
+    """Seed built-in process definitions — insert new ones, update existing ones."""
     for defn in _SEED_DEFINITIONS:
         existing = await get_process_definition(defn["process_id"])
-        if not existing:
+        if existing:
+            await update_process_definition(defn["process_id"], defn)
+            logger.info("updated_process_definition", extra={"process_id": defn["process_id"]})
+        else:
             await create_process_definition(defn)
             logger.info("seeded_process_definition", extra={"process_id": defn["process_id"]})
