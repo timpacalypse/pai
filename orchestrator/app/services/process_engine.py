@@ -566,6 +566,7 @@ async def _skill_web_search(inputs: dict) -> dict:
 
 
 async def _skill_email_send(inputs: dict) -> dict:
+    import asyncio
     import smtplib
     from email.mime.text import MIMEText
     from app.core.config import settings
@@ -576,7 +577,8 @@ async def _skill_email_send(inputs: dict) -> dict:
     body = inputs.get("body", "")
     if not (to_addr and subject and body and settings.gmail_address and settings.gmail_app_password):
         return {"send_confirmation": False, "reason": "Missing to/subject/body or gmail config"}
-    try:
+
+    def _send_sync():
         msg = MIMEText(str(body), "plain")
         msg["Subject"] = subject
         msg["From"] = f"PAI Process <{settings.gmail_address}>"
@@ -584,6 +586,9 @@ async def _skill_email_send(inputs: dict) -> dict:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(settings.gmail_address, settings.gmail_app_password)
             server.send_message(msg)
+
+    try:
+        await asyncio.to_thread(_send_sync)
         return {"send_confirmation": True}
     except Exception as e:
         logger.error("skill_email_send_failed", extra={"error": str(e)})
@@ -628,15 +633,87 @@ async def _skill_identity_goals(inputs: dict) -> dict:
     async with async_session() as session:
         if role:
             result = await session.execute(
-                sql_text("SELECT key, value FROM identity_memory WHERE category = 'goals' AND key ILIKE :role"),
+                sql_text("SELECT role, domain, goals, preferences, constraints FROM identity_memory WHERE role ILIKE :role"),
                 {"role": f"%{role}%"},
             )
         else:
             result = await session.execute(
-                sql_text("SELECT key, value FROM identity_memory WHERE category = 'goals'"),
+                sql_text("SELECT role, domain, goals, preferences, constraints FROM identity_memory"),
             )
         rows = [dict(r) for r in result.mappings().all()]
     return {"goals": rows}
+
+
+async def _skill_rss_fetch(inputs: dict) -> dict:
+    """Fetch articles from RSS feeds, optionally filtered by recency."""
+    import asyncio
+    import xml.etree.ElementTree as ET
+    from datetime import datetime, timedelta, timezone
+    import httpx
+
+    sources = inputs.get("sources", [])
+    hours_back = int(inputs.get("hours_back", 24))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    articles = []
+
+    async def _fetch_feed(url: str, client: httpx.AsyncClient):
+        try:
+            resp = await client.get(url, follow_redirects=True, timeout=15.0)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            # Handle both RSS 2.0 and Atom
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+            for item in items:
+                title = (item.findtext("title") or item.findtext("atom:title", namespaces=ns) or "").strip()
+                link = (item.findtext("link") or "").strip()
+                if not link:
+                    link_el = item.find("atom:link", ns)
+                    link = link_el.get("href", "") if link_el is not None else ""
+                desc = (item.findtext("description") or item.findtext("atom:summary", namespaces=ns) or "").strip()
+                if title and link:
+                    articles.append({"title": title, "url": link, "summary": desc[:500], "source": url})
+        except Exception as e:
+            logger.warning("rss_fetch_failed", extra={"url": url, "error": str(e)})
+
+    async with httpx.AsyncClient() as client:
+        await asyncio.gather(*[_fetch_feed(s, client) for s in sources])
+
+    return {"raw_articles": articles[:50]}
+
+
+async def _skill_template_render(inputs: dict) -> dict:
+    """Render a plain-text email from structured context sections."""
+    template_name = inputs.get("template_name", "default")
+    sections = []
+
+    weather = inputs.get("weather", "")
+    if weather:
+        sections.append(f"WEATHER\n{'='*40}\n{weather}")
+
+    calendar = inputs.get("calendar", "")
+    if calendar:
+        cal_text = calendar if isinstance(calendar, str) else str(calendar)
+        sections.append(f"CALENDAR\n{'='*40}\n{cal_text}")
+
+    articles = inputs.get("articles", "")
+    if articles:
+        art_text = articles if isinstance(articles, str) else str(articles)
+        sections.append(f"NEWS & ARTICLES\n{'='*40}\n{art_text}")
+
+    recommendations = inputs.get("recommendations", "")
+    if recommendations:
+        rec_text = recommendations if isinstance(recommendations, str) else str(recommendations)
+        sections.append(f"RECOMMENDATIONS\n{'='*40}\n{rec_text}")
+
+    # Catch-all for any extra context keys
+    skip_keys = {"template_name", "weather", "calendar", "articles", "recommendations"}
+    for k, v in inputs.items():
+        if k not in skip_keys and v:
+            sections.append(f"{k.upper().replace('_', ' ')}\n{'='*40}\n{v}")
+
+    rendered = f"\n\n".join(sections) if sections else "(No content available)"
+    return {"rendered_email": rendered}
 
 
 _SKILL_REGISTRY: dict[str, callable] = {
@@ -652,6 +729,8 @@ _SKILL_REGISTRY: dict[str, callable] = {
     "memory_query": _skill_memory_query,
     "memory_store": _skill_memory_store,
     "identity_goals": _skill_identity_goals,
+    "rss_fetch": _skill_rss_fetch,
+    "template_render": _skill_template_render,
 }
 
 
