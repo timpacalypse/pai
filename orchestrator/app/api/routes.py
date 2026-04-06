@@ -301,6 +301,12 @@ async def chat(req: ChatRequest, request: Request):
         content = await _handle_briefing_chat(request, req.message)
         return _build_chat_response(req, roles, content, "briefing", start)
 
+    # Check if user wants to run a process
+    process_match = await _match_process_request(req.message, http_client)
+    if process_match:
+        content = await _handle_process_chat(process_match, req.message, http_client)
+        return _build_chat_response(req, roles, content, "process_run", start)
+
     # Skill mutation intents — route to actual skill services
     if intent == "medical_record":
         content = await _handle_skill_mutation("medical", req.message, http_client)
@@ -666,6 +672,102 @@ async def _gather_skill_context_by_type(context_types: list[str]) -> list[str]:
             context.append("Calendar: Unable to retrieve calendar data.")
 
     return context
+
+
+async def _match_process_request(message: str, http_client=None) -> dict | None:
+    """Check if a chat message is asking about or wanting to run a process.
+
+    Returns the matched process definition dict, or None.
+    """
+    from app.services.process_engine import list_process_definitions
+    processes = await list_process_definitions()
+
+    msg_lower = message.lower()
+
+    # Direct name/keyword matching against process definitions
+    for proc in processes:
+        proc_name = proc["name"].lower()
+        proc_id = proc["process_id"].lower().replace("_", " ")
+        # Check if key phrases from the process name appear in the message
+        name_words = [w for w in proc_name.split() if len(w) > 3]  # skip short words
+        if len(name_words) >= 2:
+            matches = sum(1 for w in name_words if w in msg_lower)
+            if matches >= 2:
+                return proc
+        # Also check process_id words
+        id_words = [w for w in proc_id.split() if len(w) > 3]
+        if len(id_words) >= 2:
+            matches = sum(1 for w in id_words if w in msg_lower)
+            if matches >= 2:
+                return proc
+
+    return None
+
+
+async def _handle_process_chat(process: dict, message: str, http_client=None) -> str:
+    """Handle a chat message that references a process — describe it or run it."""
+    msg_lower = message.lower()
+
+    # Detect if user wants to RUN it vs just asking about it
+    run_indicators = any(w in msg_lower for w in (
+        "run ", "start ", "execute ", "trigger ", "launch ", "kick off",
+        "do ", "perform ", "generate ", "send ",
+    ))
+
+    proc_id = process["process_id"]
+    proc_name = process["name"]
+    steps = process.get("steps", [])
+    step_names = [s.get("name", s.get("id", "?")) for s in steps]
+    trigger = process.get("trigger_config", {}).get("type", "manual")
+
+    if run_indicators:
+        # Actually start the process
+        try:
+            from app.services.process_engine import start_process
+            execution = await start_process(proc_id, params={}, http_client=http_client)
+            exec_id = execution.get("execution_id", "unknown")
+            status = execution.get("status", "unknown")
+
+            if status == "completed":
+                return (
+                    f"**{proc_name}** has completed successfully.\n\n"
+                    f"Execution ID: `{exec_id}`\n"
+                    f"Steps executed: {len(steps)}\n\n"
+                    f"Results have been stored in memory and emailed to you."
+                )
+            elif status == "waiting_for_gate":
+                gate_step = next((s for s in steps if s.get("type") == "gate"), None)
+                gate_msg = gate_step.get("gate_message", "Waiting for approval") if gate_step else "Waiting for approval"
+                return (
+                    f"**{proc_name}** is paused at a review gate.\n\n"
+                    f"Execution ID: `{exec_id}`\n"
+                    f"Gate: {gate_msg}\n\n"
+                    f"Approve or reject via the process API when ready."
+                )
+            elif status in ("error", "failed"):
+                error = execution.get("error", "Unknown error")
+                completed_steps = [s for s in execution.get("step_log", []) if s.get("status") == "completed"]
+                return (
+                    f"**{proc_name}** encountered an error after completing {len(completed_steps)}/{len(steps)} steps.\n\n"
+                    f"Error: {error}\n"
+                    f"Execution ID: `{exec_id}`"
+                )
+            else:
+                return f"**{proc_name}** started (status: {status}). Execution ID: `{exec_id}`"
+        except Exception as e:
+            return f"Failed to start **{proc_name}**: {e}"
+    else:
+        # Describe the process
+        schedule_info = f"Scheduled: {trigger}" if trigger != "manual" else "Trigger: manual (on-demand)"
+        step_list = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(step_names))
+        return (
+            f"**{proc_name}**\n\n"
+            f"{process.get('description', '')}\n\n"
+            f"{schedule_info}\n"
+            f"Roles: {', '.join(process.get('roles', []))}\n\n"
+            f"**Steps ({len(steps)}):**\n{step_list}\n\n"
+            f"Would you like me to run it now?"
+        )
 
 
 async def _detect_and_route_skill_action(

@@ -663,7 +663,6 @@ async def _execute_agent_step(
     """Execute an agent step using the existing agent pipeline."""
     from uuid import uuid4 as uid4
     from app.agents.base import AgentInput
-    from app.core.orchestrator import Orchestrator
 
     agent_name = step.get("agent", "research")
     output_keys = step.get("outputs", [])
@@ -678,10 +677,11 @@ async def _execute_agent_step(
 
     task_text = "\n".join(task_parts) if task_parts else step.get("name", "Process step")
 
-    orchestrator = Orchestrator()
-    agent = orchestrator._agents.get(agent_name)
+    # Import the module-level agent registry
+    from app.core import orchestrator as orch_module
+    agent = orch_module._agents.get(agent_name)
     if not agent:
-        raise ValueError(f"Agent '{agent_name}' not found")
+        raise ValueError(f"Agent '{agent_name}' not found in registry: {list(orch_module._agents.keys())}")
 
     agent_input = AgentInput(
         request_id=uid4(),
