@@ -311,8 +311,23 @@ async def chat(req: ChatRequest, request: Request):
         return _build_chat_response(req, roles, content, "home_record", start)
 
     if intent == "calendar_event":
-        content = await _handle_skill_mutation("calendar", req.message, http_client)
-        return _build_chat_response(req, roles, content, "calendar_event", start)
+        # Guard: detect read queries that were misclassified as calendar mutations
+        msg_lower = req.message.lower().strip()
+        read_indicators = (
+            msg_lower.startswith(("what", "when", "show", "list", "check", "any", "do i have", "is there", "are there", "tell me", "how many"))
+            or "what's on" in msg_lower
+            or "what is on" in msg_lower
+            or "upcoming" in msg_lower
+        )
+        create_indicators = any(w in msg_lower for w in ("add ", "schedule ", "create ", "set up ", "book ", "put ", "plan ", "new event", "remind me"))
+        if read_indicators and not create_indicators:
+            # Redirect to conversation path with calendar context
+            intent = "conversation"
+            if "calendar" not in skill_context_types:
+                skill_context_types.append("calendar")
+        else:
+            content = await _handle_skill_mutation("calendar", req.message, http_client)
+            return _build_chat_response(req, roles, content, "calendar_event", start)
 
     # ── Step 3: Conversation — build context and generate response ──
     from app.services.prompt_service import build_chat_prompt
@@ -1304,6 +1319,20 @@ async def remove_calendar_event(event_id: int):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Event not found")
     return {"deleted": True}
+
+
+@router.get("/skills/calendar/google/status")
+async def google_calendar_status():
+    """Check if Google Calendar integration is configured and working."""
+    try:
+        from app.services.google_calendar_service import is_configured, get_google_events
+        configured = await is_configured()
+        if not configured:
+            return {"status": "not_configured", "message": "Place google_credentials.json in /credentials/ directory and restart"}
+        events = await get_google_events(days=1)
+        return {"status": "connected", "events_today": len(events)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # ── Learning Loop ───────────────────────────────────────────────

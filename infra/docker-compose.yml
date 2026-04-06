@@ -19,6 +19,7 @@ services:
         condition: service_healthy
     volumes:
       - ../orchestrator/app:/app/app
+      - ../credentials:/app/credentials
     networks:
       - pai-net
     restart: unless-stopped

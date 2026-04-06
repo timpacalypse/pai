@@ -222,9 +222,32 @@ async def delete_event(event_id: int) -> bool:
         return deleted
 
 
+async def _get_merged_events(days: int) -> list[dict]:
+    """Get events from both local DB and Google Calendar, merged and sorted."""
+    local_events = await get_events(upcoming_days=days)
+
+    # Try Google Calendar
+    google_events = []
+    try:
+        from app.services.google_calendar_service import get_google_events
+        google_events = await get_google_events(days=days)
+    except Exception as e:
+        logger.warning(f"Google Calendar unavailable: {e}")
+
+    # Tag local events with source
+    for e in local_events:
+        if "source" not in e:
+            e["source"] = "local"
+
+    merged = local_events + google_events
+    # Sort by date, then time
+    merged.sort(key=lambda e: (str(e.get("event_date", "")), str(e.get("event_time", "") or "")))
+    return merged
+
+
 async def get_agenda(days: int = 7) -> dict:
     """Get upcoming events for the next N days, grouped by date."""
-    events = await get_events(upcoming_days=days)
+    events = await _get_merged_events(days)
     by_date: dict[str, list[dict]] = {}
     for e in events:
         date_key = str(e["event_date"])
@@ -244,16 +267,17 @@ async def get_agenda(days: int = 7) -> dict:
 
 async def build_calendar_context(days: int = 14) -> str:
     """Build plain-text agenda for chat context. Always returns a message."""
-    events = await get_events(upcoming_days=days)
+    events = await _get_merged_events(days)
     if not events:
         return f"Calendar: No upcoming events in the next {days} days."
     lines = [f"Upcoming events (next {days} days):"]
     for e in events:
         date_str = str(e["event_date"])
-        time_str = f" at {e['event_time']}" if e.get("event_time") else ""
-        who = f" ({e['family_member_name']})" if e.get("family_member_name", "family") != "family" else ""
+        time_str = f" at {e['event_time']}" if e.get("event_time") else " (all day)"
+        who = f" ({e['family_member_name']})" if e.get("family_member_name") and e["family_member_name"] not in ("family", "") else ""
         recur = f" [repeats {e['recurrence']}]" if e.get("recurrence", "none") != "none" else ""
-        lines.append(f"  {date_str}{time_str}: {e['title']}{who}{recur}")
+        source_tag = " [Google Calendar]" if e.get("source") == "google_calendar" else ""
+        lines.append(f"  {date_str}{time_str}: {e['title']}{who}{recur}{source_tag}")
         if e.get("location"):
             lines.append(f"    Location: {e['location']}")
     return "\n".join(lines)

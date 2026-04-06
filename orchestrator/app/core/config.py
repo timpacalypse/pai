@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Autonomous background workflows
     autonomous_schedule_hours: float = 12.0  # hours between autonomous runs, 0 = disabled
 
+    # Google Calendar
+    google_credentials_path: str = "/app/credentials/google_credentials.json"
+    google_token_path: str = "/app/credentials/google_token.json"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
