@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=120.0)
     await load_roles()
 
+    # Seed process engine definitions
+    from app.services.process_engine import seed_process_definitions
+    try:
+        await seed_process_definitions()
+    except Exception as e:
+        logger.warning(f"Process seed failed (table may not exist yet): {e}")
+
     # Start background schedulers
     scheduler_task = asyncio.create_task(scheduler_loop())
     app.state.scheduler_task = scheduler_task

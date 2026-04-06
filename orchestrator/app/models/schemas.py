@@ -285,3 +285,50 @@ class CalendarEventRequest(BaseModel):
     location: str = ""
     recurrence: str = Field(default="none", pattern=r"^(none|weekly|monthly|yearly)$")
     notes: str = ""
+
+
+# ── Process Engine ──────────────────────────────────────────────
+
+
+class ProcessStepDef(BaseModel):
+    id: str
+    type: str = Field(..., pattern=r"^(skill|agent|decision|gate)$")
+    name: str = ""
+    skill_id: str | None = None
+    agent: str | None = None
+    inputs: dict = {}
+    outputs: list[str] = []
+    parallel_group: str | None = None
+    condition: str | None = None          # decision steps
+    branches: dict | None = None          # decision: {"true": "step_id", "false": "step_id"}
+    gate_message: str | None = None       # gate steps
+
+
+class ProcessDefinitionCreate(BaseModel):
+    process_id: str = Field(..., min_length=1, max_length=120)
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str = ""
+    roles: list[str] = []
+    trigger_config: dict = {}
+    steps: list[ProcessStepDef] = []
+
+
+class ProcessDefinitionUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    roles: list[str] | None = None
+    trigger_config: dict | None = None
+    steps: list[ProcessStepDef] | None = None
+    is_active: bool | None = None
+
+
+class ProcessStartRequest(BaseModel):
+    process_id: str = Field(..., min_length=1)
+    role: str | None = None
+    params: dict = {}
+
+
+class GateResponse(BaseModel):
+    decision: str = Field(..., pattern=r"^(approve|reject|modify)$")
+    message: str = ""
+    modifications: dict = {}

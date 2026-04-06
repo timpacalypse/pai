@@ -1721,3 +1721,334 @@ def test_chat_home_role_inference(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["domain"] in ("personal", "family")
+
+
+# ── Process Engine ──────────────────────────────────────────────
+
+
+def test_process_list_seeded(client):
+    """Seeded daily_brief definition should exist."""
+    resp = client.get("/processes")
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = [p["process_id"] for p in data["processes"]]
+    assert "daily_brief" in ids
+
+
+def test_process_get_definition(client):
+    """GET a specific process definition."""
+    resp = client.get("/processes/daily_brief")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["process_id"] == "daily_brief"
+    assert len(data["steps"]) == 7
+    assert data["is_active"] is True
+
+
+def test_process_create_and_delete(client):
+    """Create and soft-delete a process definition."""
+    resp = client.post("/processes", json={
+        "process_id": "test_process",
+        "name": "Test Process",
+        "description": "For integration testing",
+        "steps": [
+            {"id": "step1", "type": "skill", "name": "Step 1",
+             "skill_id": "test_skill", "inputs": {"x": 1}, "outputs": ["result"]},
+        ],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["process_id"] == "test_process"
+
+    # Soft delete
+    resp = client.delete("/processes/test_process")
+    assert resp.status_code == 200
+
+    # Should not appear in active list
+    resp = client.get("/processes")
+    ids = [p["process_id"] for p in resp.json()["processes"]]
+    assert "test_process" not in ids
+
+
+def test_process_update(client):
+    """Update a process definition."""
+    # Create
+    client.post("/processes", json={
+        "process_id": "test_update_proc",
+        "name": "Original Name",
+        "steps": [],
+    })
+
+    # Update
+    resp = client.patch("/processes/test_update_proc", json={"name": "Updated Name"})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Updated Name"
+
+    # Cleanup
+    client.delete("/processes/test_update_proc")
+
+
+def test_process_start_skill_steps(client):
+    """Start a process with skill steps — should complete with stub outputs."""
+    # Create a simple process
+    client.post("/processes", json={
+        "process_id": "test_skill_run",
+        "name": "Skill Test",
+        "steps": [
+            {"id": "s1", "type": "skill", "name": "First",
+             "skill_id": "alpha", "inputs": {"val": "hello"}, "outputs": ["out1"]},
+            {"id": "s2", "type": "skill", "name": "Second",
+             "skill_id": "beta", "inputs": {"prev": "steps.s1.out1"}, "outputs": ["out2"]},
+        ],
+    })
+
+    # Start it
+    resp = client.post("/processes/start", json={
+        "process_id": "test_skill_run",
+        "params": {"user": "tim"},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "completed"
+    assert len(data["step_log"]) == 2
+    assert data["step_log"][0]["status"] == "completed"
+    assert data["step_log"][1]["status"] == "completed"
+
+    # Verify context accumulation — s2 should have resolved ref from s1
+    ctx = data["process_context"]
+    assert "s1" in ctx["steps"]
+    assert "s2" in ctx["steps"]
+    assert ctx["steps"]["s1"]["out1"] == "[stub:alpha:out1]"
+
+    # Cleanup
+    client.delete("/processes/test_skill_run")
+
+
+def test_process_parallel_steps(client):
+    """Steps with same parallel_group should all execute."""
+    client.post("/processes", json={
+        "process_id": "test_parallel",
+        "name": "Parallel Test",
+        "steps": [
+            {"id": "p1", "type": "skill", "skill_id": "a",
+             "inputs": {}, "outputs": ["r1"], "parallel_group": "gather"},
+            {"id": "p2", "type": "skill", "skill_id": "b",
+             "inputs": {}, "outputs": ["r2"], "parallel_group": "gather"},
+            {"id": "p3", "type": "skill", "skill_id": "c",
+             "inputs": {}, "outputs": ["r3"], "parallel_group": "gather"},
+            {"id": "final", "type": "skill", "skill_id": "d",
+             "inputs": {"a": "steps.p1.r1", "b": "steps.p2.r2"}, "outputs": ["done"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_parallel"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "completed"
+    assert len(data["step_log"]) == 4
+    # All parallel steps should be completed
+    for entry in data["step_log"][:3]:
+        assert entry["status"] == "completed"
+
+    client.delete("/processes/test_parallel")
+
+
+def test_process_gate_pauses(client):
+    """Gate step should pause the execution."""
+    client.post("/processes", json={
+        "process_id": "test_gate",
+        "name": "Gate Test",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "x",
+             "inputs": {}, "outputs": ["data"]},
+            {"id": "review", "type": "gate", "name": "Human Review",
+             "gate_message": "Please review the data before proceeding",
+             "inputs": {"data_to_review": "steps.s1.data"}},
+            {"id": "s2", "type": "skill", "skill_id": "y",
+             "inputs": {"approved": "steps.review.gate_decision"},
+             "outputs": ["final"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_gate"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "paused"
+    assert data["gate_message"] == "Please review the data before proceeding"
+    eid = data["execution_id"]
+
+    # Check execution shows paused
+    resp = client.get(f"/processes/executions/{eid}")
+    assert resp.json()["status"] == "paused"
+
+    client.delete("/processes/test_gate")
+
+
+def test_process_gate_approve_resumes(client):
+    """Approving a gate should resume and complete the process."""
+    client.post("/processes", json={
+        "process_id": "test_gate_approve",
+        "name": "Gate Approve Test",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "x",
+             "inputs": {}, "outputs": ["data"]},
+            {"id": "review", "type": "gate", "name": "Review",
+             "gate_message": "Approve?"},
+            {"id": "s2", "type": "skill", "skill_id": "y",
+             "inputs": {}, "outputs": ["final"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_gate_approve"})
+    eid = resp.json()["execution_id"]
+
+    # Approve the gate
+    resp = client.post(f"/processes/executions/{eid}/gate", json={
+        "decision": "approve", "message": "looks good"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "completed"
+    assert len(data["step_log"]) == 3  # s1 + gate + s2
+
+    client.delete("/processes/test_gate_approve")
+
+
+def test_process_gate_reject_cancels(client):
+    """Rejecting a gate should cancel the process."""
+    client.post("/processes", json={
+        "process_id": "test_gate_reject",
+        "name": "Gate Reject Test",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "x",
+             "inputs": {}, "outputs": ["data"]},
+            {"id": "review", "type": "gate", "name": "Review",
+             "gate_message": "Approve?"},
+            {"id": "s2", "type": "skill", "skill_id": "y",
+             "inputs": {}, "outputs": ["final"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_gate_reject"})
+    eid = resp.json()["execution_id"]
+
+    # Reject the gate
+    resp = client.post(f"/processes/executions/{eid}/gate", json={
+        "decision": "reject", "message": "not ready"
+    })
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+
+    client.delete("/processes/test_gate_reject")
+
+
+def test_process_context_accumulation(client):
+    """Verify step outputs appear in process_context under steps.<id>."""
+    client.post("/processes", json={
+        "process_id": "test_ctx_accum",
+        "name": "Context Accumulation",
+        "steps": [
+            {"id": "a", "type": "skill", "skill_id": "s1",
+             "inputs": {}, "outputs": ["val"]},
+            {"id": "b", "type": "skill", "skill_id": "s2",
+             "inputs": {"ref": "steps.a.val"}, "outputs": ["val2"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_ctx_accum"})
+    data = resp.json()
+    ctx = data["process_context"]
+    assert ctx["steps"]["a"]["val"] == "[stub:s1:val]"
+    assert ctx["steps"]["b"]["val2"] == "[stub:s2:val2]"
+
+    client.delete("/processes/test_ctx_accum")
+
+
+def test_process_invalid_reference_fails(client):
+    """A step referencing a non-existent step output should fail."""
+    client.post("/processes", json={
+        "process_id": "test_bad_ref",
+        "name": "Bad Ref Test",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "x",
+             "inputs": {"bad": "steps.nonexistent.data"}, "outputs": ["out"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_bad_ref"})
+    data = resp.json()
+    assert data["status"] == "failed"
+    assert "nonexistent" in data["error"]
+
+    client.delete("/processes/test_bad_ref")
+
+
+def test_process_step_log_completeness(client):
+    """Step log should contain timing, type, and status for all steps."""
+    client.post("/processes", json={
+        "process_id": "test_log_check",
+        "name": "Log Check",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "alpha",
+             "inputs": {}, "outputs": ["out"]},
+            {"id": "s2", "type": "skill", "skill_id": "beta",
+             "inputs": {}, "outputs": ["out"]},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_log_check"})
+    data = resp.json()
+    for entry in data["step_log"]:
+        assert "step_id" in entry
+        assert "step_type" in entry
+        assert "duration_ms" in entry
+        assert "status" in entry
+        assert "started_at" in entry
+
+    client.delete("/processes/test_log_check")
+
+
+def test_process_execution_list(client):
+    """List executions with filter."""
+    # Start a process first
+    client.post("/processes", json={
+        "process_id": "test_exec_list",
+        "name": "Exec List",
+        "steps": [
+            {"id": "s1", "type": "skill", "skill_id": "a",
+             "inputs": {}, "outputs": ["out"]},
+        ],
+    })
+    client.post("/processes/start", json={"process_id": "test_exec_list"})
+
+    resp = client.get("/processes/executions", params={"process_id": "test_exec_list"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["executions"]) >= 1
+
+    client.delete("/processes/test_exec_list")
+
+
+def test_process_cancel(client):
+    """Cancel a paused execution."""
+    client.post("/processes", json={
+        "process_id": "test_cancel",
+        "name": "Cancel Test",
+        "steps": [
+            {"id": "gate1", "type": "gate", "gate_message": "Stop here"},
+        ],
+    })
+
+    resp = client.post("/processes/start", json={"process_id": "test_cancel"})
+    eid = resp.json()["execution_id"]
+
+    resp = client.post(f"/processes/executions/{eid}/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+
+    client.delete("/processes/test_cancel")
+
+
+def test_process_404(client):
+    """Non-existent process should return 404."""
+    resp = client.get("/processes/nonexistent_xyz")
+    assert resp.status_code == 404

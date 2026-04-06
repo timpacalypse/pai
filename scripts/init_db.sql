@@ -425,3 +425,45 @@ CREATE INDEX IF NOT EXISTS idx_overrides_agent
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_overrides_experiment
     ON prompt_overrides (experiment_id);
+
+
+-- ── Process Engine ──────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS process_definitions (
+    id              SERIAL PRIMARY KEY,
+    process_id      VARCHAR(120) NOT NULL UNIQUE,
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT DEFAULT '',
+    roles           JSONB DEFAULT '[]',         -- list of role names this process applies to
+    trigger_config  JSONB DEFAULT '{}',         -- {"type": "manual|scheduled", "cron": "..."}
+    steps           JSONB DEFAULT '[]',         -- ordered list of step definitions
+    is_active       BOOLEAN DEFAULT TRUE,
+    execution_count INTEGER DEFAULT 0,
+    success_count   INTEGER DEFAULT 0,
+    avg_duration_ms FLOAT DEFAULT 0,
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_procdef_active ON process_definitions (is_active);
+
+CREATE TABLE IF NOT EXISTS process_executions (
+    id               SERIAL PRIMARY KEY,
+    execution_id     VARCHAR(64) NOT NULL UNIQUE,   -- uuid
+    process_id       VARCHAR(120) NOT NULL REFERENCES process_definitions(process_id),
+    status           VARCHAR(20) DEFAULT 'running', -- running, paused, completed, failed, cancelled
+    current_step_idx INTEGER DEFAULT 0,
+    process_context  JSONB DEFAULT '{}',            -- accumulated outputs from all steps
+    trigger_params   JSONB DEFAULT '{}',            -- initial input params
+    role             VARCHAR(60) DEFAULT '',
+    step_log         JSONB DEFAULT '[]',            -- [{step_id, type, start, end, duration_ms, status, error}]
+    gate_message     TEXT DEFAULT '',               -- message to show human when paused at gate
+    gate_context     JSONB DEFAULT '{}',            -- relevant data for gate decision
+    started_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    completed_at     TIMESTAMP WITH TIME ZONE,
+    error            TEXT DEFAULT '',
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_procexec_process ON process_executions (process_id);
+CREATE INDEX IF NOT EXISTS idx_procexec_status  ON process_executions (status);

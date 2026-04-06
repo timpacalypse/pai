@@ -14,6 +14,7 @@ from app.models.schemas import (
     MedicalTellRequest, MedicalRecordRequest,
     RecipeRequest, RecipeRateRequest,
     CalendarTellRequest, CalendarEventRequest,
+    ProcessDefinitionCreate, ProcessDefinitionUpdate, ProcessStartRequest, GateResponse,
 )
 from app.core.orchestrator import handle_task, handle_competition
 from app.core.config import settings
@@ -1369,3 +1370,125 @@ async def preview_briefing(request: Request):
     from app.services.briefing_service import build_daily_briefing
     briefing = await build_daily_briefing(http_client=request.app.state.http_client)
     return briefing
+
+
+# ── Process Engine ──────────────────────────────────────────────
+
+
+@router.get("/processes")
+async def list_processes(role: str | None = None, include_inactive: bool = False):
+    """List process definitions."""
+    from app.services.process_engine import list_process_definitions
+    defs = await list_process_definitions(active_only=not include_inactive, role=role)
+    return {"processes": defs}
+
+
+@router.get("/processes/executions")
+async def list_process_executions(
+    process_id: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+):
+    """List process executions with optional filters."""
+    from app.services.process_engine import list_executions
+    execs = await list_executions(process_id=process_id, status=status, limit=limit)
+    return {"executions": execs}
+
+
+@router.get("/processes/executions/{execution_id}")
+async def get_process_execution(execution_id: str):
+    """Get full state of a process execution."""
+    from app.services.process_engine import get_execution
+    exc = await get_execution(execution_id)
+    if not exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Execution '{execution_id}' not found")
+    return exc
+
+
+@router.post("/processes/start")
+async def start_process(req: ProcessStartRequest, request: Request):
+    """Start a new process execution."""
+    from app.services.process_engine import start_process as do_start
+    result = await do_start(
+        process_id=req.process_id,
+        params=req.params,
+        role=req.role,
+        http_client=request.app.state.http_client,
+    )
+    # Only raise 400 for startup errors (no execution created), not execution failures
+    if result.get("error") and "execution_id" not in result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/processes/{process_id}")
+async def get_process(process_id: str):
+    """Get a process definition by ID."""
+    from app.services.process_engine import get_process_definition
+    defn = await get_process_definition(process_id)
+    if not defn:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Process '{process_id}' not found")
+    return defn
+
+
+@router.post("/processes")
+async def create_process(req: ProcessDefinitionCreate):
+    """Create a new process definition."""
+    from app.services.process_engine import create_process_definition
+    defn = await create_process_definition(req.model_dump())
+    return defn
+
+
+@router.patch("/processes/{process_id}")
+async def update_process(process_id: str, req: ProcessDefinitionUpdate):
+    """Update a process definition."""
+    from app.services.process_engine import update_process_definition
+    updates = req.model_dump(exclude_unset=True)
+    defn = await update_process_definition(process_id, updates)
+    if not defn:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Process '{process_id}' not found")
+    return defn
+
+
+@router.delete("/processes/{process_id}")
+async def delete_process(process_id: str):
+    """Soft-delete a process definition (set inactive)."""
+    from app.services.process_engine import soft_delete_process_definition
+    defn = await soft_delete_process_definition(process_id)
+    if not defn:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Process '{process_id}' not found")
+    return {"status": "deleted", "process_id": process_id}
+
+
+@router.post("/processes/executions/{execution_id}/gate")
+async def respond_to_gate(execution_id: str, req: GateResponse, request: Request):
+    """Respond to a gate step (approve, reject, or modify)."""
+    from app.services.process_engine import resume_process
+    result = await resume_process(
+        execution_id=execution_id,
+        decision=req.decision,
+        message=req.message,
+        modifications=req.modifications,
+        http_client=request.app.state.http_client,
+    )
+    # Only raise 400 for lookup errors, not for execution-level state
+    if result.get("error") and "execution_id" not in result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.post("/processes/executions/{execution_id}/cancel")
+async def cancel_process_execution(execution_id: str):
+    """Cancel a running or paused execution."""
+    from app.services.process_engine import cancel_execution
+    result = await cancel_execution(execution_id)
+    if result.get("error") and "execution_id" not in result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
