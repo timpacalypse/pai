@@ -394,3 +394,87 @@ select:focus, input[type="text"]:focus {
 .meal-table tr:hover td {
     background: rgba(79, 142, 247, 0.06);
 }
+
+/* ── Skills Inventory ── */
+.skills-category-header {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    font-weight: 700;
+    margin: 14px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.skill-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin: 5px 0;
+    transition: border-color 0.2s;
+}
+
+.skill-card:hover {
+    border-color: var(--accent);
+}
+
+.skill-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.skill-card-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.skill-card-badges {
+    display: flex;
+    gap: 4px;
+}
+
+.skill-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.skill-badge.read {
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--success);
+}
+
+.skill-badge.write {
+    background: rgba(79, 142, 247, 0.15);
+    color: var(--accent);
+}
+
+.skill-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 6px;
+}
+
+.skill-card-examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.skill-example {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-dark);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-style: italic;
+}

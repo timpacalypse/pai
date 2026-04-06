@@ -77,6 +77,28 @@ async def list_roles():
     return {"domains": grouped, "total_roles": len(roles)}
 
 
+@router.get("/skills")
+async def list_all_skills():
+    """List all registered skills with metadata."""
+    from app.services.skill_registry import list_skills
+    skills = list_skills()
+    return {
+        "skills": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "description": s.description,
+                "examples": s.examples,
+                "category": s.category,
+                "can_read": s.read_handler is not None,
+                "can_write": s.write_handler is not None,
+            }
+            for s in skills
+        ],
+        "total": len(skills),
+    }
+
+
 @router.post("/skills/web-research", response_model=WebResearchResponse)
 async def web_research(req: WebResearchRequest, request: Request):
     """Search the web for articles on a topic, score/rank them, deduplicate, and optionally ingest."""

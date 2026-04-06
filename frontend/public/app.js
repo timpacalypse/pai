@@ -27,6 +27,7 @@ const homeOpts = document.getElementById('home-options');
 const medicalOpts = document.getElementById('medical-options');
 const recipesOpts = document.getElementById('recipes-options');
 const calendarOpts = document.getElementById('calendar-options');
+const skillsOpts = document.getElementById('skills-options');
 const timeFilter = document.getElementById('time-filter');
 const autoIngest = document.getElementById('auto-ingest');
 const strategySelect = document.getElementById('strategy-select');
@@ -63,6 +64,9 @@ async function init() {
             medicalOpts.classList.toggle('hidden', state.mode !== 'medical');
             recipesOpts.classList.toggle('hidden', state.mode !== 'recipes');
             calendarOpts.classList.toggle('hidden', state.mode !== 'calendar');
+            skillsOpts.classList.toggle('hidden', state.mode !== 'skills');
+
+            if (state.mode === 'skills') { loadSkillsInventory(); }
 
             // Update placeholder
             const placeholders = {
@@ -78,6 +82,7 @@ async function init() {
                 medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
                 recipes: 'Save a recipe (e.g. paste a recipe title + ingredients) or search...',
                 calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
+                skills: 'Skills mode — click a skill or use "Refresh Skills" to see the inventory',
             };
             inputEl.placeholder = placeholders[state.mode] || 'Type a message...';
         });
@@ -104,6 +109,9 @@ async function init() {
     document.getElementById('home-alerts-btn').addEventListener('click', checkHomeAlerts);
     document.getElementById('home-docs-btn').addEventListener('click', searchHomeDocs);
     document.getElementById('home-upload').addEventListener('change', handleHomeUpload);
+
+    // Skills mode buttons
+    document.getElementById('skills-load-btn').addEventListener('click', loadSkillsInventory);
 
     addSystemMessage('Welcome to PAI. Your roles and agents are auto-selected from your prompt. Override with the dropdowns if needed.');
 
@@ -794,6 +802,82 @@ function renderHomeDocs(docs) {
 
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// ── Skills Inventory ──
+
+async function loadSkillsInventory() {
+    const loading = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills`);
+        const data = await resp.json();
+        loading.remove();
+
+        const skills = data.skills || [];
+        const grouped = {};
+        for (const s of skills) {
+            const cat = s.category || 'general';
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push(s);
+        }
+
+        const div = document.createElement('div');
+        div.className = 'message ai skills-inventory';
+
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.innerHTML = `<span class="role-tag">skills</span> ${skills.length} registered skills`;
+        div.appendChild(metaEl);
+
+        const categoryOrder = ['family', 'professional', 'process', 'general'];
+        const categoryLabels = {
+            family: 'Family & Home',
+            professional: 'Professional',
+            process: 'Automated Processes',
+            general: 'General',
+        };
+
+        // Sort categories: known order first, then unknown
+        const sortedCats = Object.keys(grouped).sort((a, b) => {
+            const ia = categoryOrder.indexOf(a);
+            const ib = categoryOrder.indexOf(b);
+            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+        });
+
+        for (const cat of sortedCats) {
+            const catLabel = categoryLabels[cat] || cat.charAt(0).toUpperCase() + cat.slice(1);
+            const header = document.createElement('div');
+            header.className = 'skills-category-header';
+            header.textContent = catLabel;
+            div.appendChild(header);
+
+            for (const skill of grouped[cat]) {
+                const card = document.createElement('div');
+                card.className = 'skill-card';
+
+                const badges = [];
+                if (skill.can_read) badges.push('<span class="skill-badge read">read</span>');
+                if (skill.can_write) badges.push('<span class="skill-badge write">write</span>');
+
+                card.innerHTML = `
+                    <div class="skill-card-header">
+                        <span class="skill-card-name">${escapeHtml(skill.name)}</span>
+                        <span class="skill-card-badges">${badges.join('')}</span>
+                    </div>
+                    <div class="skill-card-desc">${escapeHtml(skill.description)}</div>
+                    <div class="skill-card-examples">${skill.examples.map(e => `<span class="skill-example">"${escapeHtml(e)}"</span>`).join('')}</div>
+                `;
+                div.appendChild(card);
+            }
+        }
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+        loading.remove();
+        addSystemMessage('Failed to load skills inventory.');
+        console.error('Skills fetch failed', e);
+    }
 }
 
 // ── Start ──
