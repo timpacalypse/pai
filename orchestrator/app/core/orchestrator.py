@@ -67,14 +67,25 @@ async def _run_agent(
     if not agent:
         return None
 
+    # Look up active prompt override for this agent
+    override = ""
+    try:
+        from app.services.learning_service import get_active_override_for_agent
+        override = await get_active_override_for_agent(agent.name)
+        if override:
+            logger.info("learning_override_applied", extra={"agent": agent.name, "override_len": len(override)})
+    except Exception:
+        pass  # Don't let override lookup break task execution
+
     agent_input = AgentInput(
         request_id=request.request_id,
         task=request.input,
         role_context=_build_role_dict(roles),
         retrieved_context=retrieved_context or [],
+        prompt_override=override,
     )
 
-    system_prompt, user_prompt = await agent.build_prompt(agent_input)
+    system_prompt, user_prompt = await agent.build_prompt_with_override(agent_input)
     model = select_model(request.input)
 
     raw_response = await generate(

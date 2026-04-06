@@ -33,6 +33,7 @@ async def autonomous_scheduler_loop():
                 await _daily_security_scan(client)
                 await _check_upcoming_meetings(client)
                 await _weekly_goal_check(client)
+                await _learning_loop(client)
         except Exception:
             logger.exception("autonomous_scheduler_error")
 
@@ -173,3 +174,55 @@ async def _weekly_goal_check(http_client: httpx.AsyncClient):
 
     except Exception as e:
         logger.error("weekly_goal_check_failed", extra={"error": str(e)})
+
+
+async def _learning_loop(http_client: httpx.AsyncClient):
+    """
+    Automated learning loop:
+    1. Evaluate any promoted experiments that have enough data
+    2. If no active experiments, generate a new improvement hypothesis
+    3. Auto-promote new experiments so the override takes effect immediately
+    
+    The evaluation step will auto-rollback experiments that hurt performance.
+    """
+    try:
+        from app.services.learning_service import (
+            get_experiments, evaluate_experiment, generate_improvement,
+            promote_experiment, get_active_overrides,
+        )
+
+        # Step 1: Evaluate any promoted experiments that have been running
+        promoted = await get_experiments(status="promoted", limit=5)
+        for exp in promoted:
+            eid = exp.get("experiment_id", "")
+            if not eid:
+                continue
+            result = await evaluate_experiment(eid, min_samples=10, http_client=http_client)
+            status = result.get("verdict") or result.get("status", "")
+            logger.info("learning_loop_evaluated", extra={
+                "experiment_id": eid,
+                "verdict": status,
+                "delta": result.get("delta"),
+                "sample_count": result.get("sample_count"),
+            })
+
+        # Step 2: If no active overrides remain, generate and promote a new experiment
+        active = await get_active_overrides()
+        if not active:
+            gen_result = await generate_improvement(http_client=http_client)
+            if gen_result.get("status") == "created":
+                eid = gen_result["experiment_id"]
+                # Auto-promote so the override takes effect for data collection
+                promote_result = await promote_experiment(eid)
+                logger.info("learning_loop_new_experiment", extra={
+                    "experiment_id": eid,
+                    "improvement": gen_result.get("improvement", {}).get("description", ""),
+                    "promote_status": promote_result.get("status"),
+                })
+            else:
+                logger.info("learning_loop_skip", extra={
+                    "reason": gen_result.get("reason", gen_result.get("status", "unknown")),
+                })
+
+    except Exception as e:
+        logger.error("learning_loop_failed", extra={"error": str(e)})

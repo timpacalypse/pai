@@ -8,6 +8,7 @@ class AgentInput(BaseModel):
     task: str
     role_context: dict = {}
     retrieved_context: list[str] = []
+    prompt_override: str = ""
 
 
 class AgentOutput(BaseModel):
@@ -36,6 +37,18 @@ class BaseAgent(ABC):
         The orchestrator will call the model on the agent's behalf.
         """
         ...
+
+    async def build_prompt_with_override(self, agent_input: AgentInput) -> tuple[str, str]:
+        """Build prompt, then apply any active prompt override."""
+        system_prompt, user_prompt = await self.build_prompt(agent_input)
+        if agent_input.prompt_override:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"── Active Learning Override ──\n"
+                f"{agent_input.prompt_override}\n"
+                f"── End Override ──"
+            )
+        return system_prompt, user_prompt
 
     def parse_response(self, raw_response: str, agent_input: AgentInput) -> AgentOutput:
         """Parse the raw model response into structured AgentOutput."""

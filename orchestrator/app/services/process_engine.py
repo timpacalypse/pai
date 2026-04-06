@@ -683,15 +683,24 @@ async def _execute_agent_step(
     if not agent:
         raise ValueError(f"Agent '{agent_name}' not found in registry: {list(orch_module._agents.keys())}")
 
+    # Look up active prompt override for this agent
+    override = ""
+    try:
+        from app.services.learning_service import get_active_override_for_agent
+        override = await get_active_override_for_agent(agent.name)
+    except Exception:
+        pass
+
     agent_input = AgentInput(
         request_id=uid4(),
         task=task_text,
         role_context=resolved_inputs.get("role_context", {}),
         retrieved_context=[],
+        prompt_override=override,
     )
 
     # Build prompt and generate
-    system_prompt, user_prompt = await agent.build_prompt(agent_input)
+    system_prompt, user_prompt = await agent.build_prompt_with_override(agent_input)
     from app.services.ollama_service import generate
     raw = await generate(
         prompt=user_prompt,

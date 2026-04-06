@@ -92,15 +92,16 @@ async def get_experiments(status: str | None = None, limit: int = 20) -> list[di
         return [dict(r) for r in result.mappings()]
 
 
-async def evaluate_experiment(experiment_id: str, http_client=None) -> dict:
+async def evaluate_experiment(experiment_id: str, min_samples: int = 10, http_client=None) -> dict:
     """
-    Compare current quality stats against the experiment's baseline.
-    If improved, promote. If worse, reject.
+    Evaluate a promoted experiment by comparing agent scores recorded
+    AFTER promotion against the baseline captured at experiment creation.
+    Requires a minimum sample count to avoid noise-driven decisions.
     """
     async with async_session() as session:
         result = await session.execute(
             text(
-                "SELECT id, improvement, baseline_stats, status "
+                "SELECT id, improvement, baseline_stats, status, created_at "
                 "FROM learning_experiments WHERE experiment_id = :eid"
             ),
             {"eid": experiment_id},
@@ -108,21 +109,37 @@ async def evaluate_experiment(experiment_id: str, http_client=None) -> dict:
         row = result.mappings().fetchone()
         if not row:
             return {"error": "Experiment not found"}
-        if row["status"] != "pending":
+        if row["status"] not in ("pending", "promoted"):
             return {"error": f"Experiment already {row['status']}"}
 
-    # Get current stats
-    current_stats = await get_agent_stats()
+    improvement = row["improvement"] if isinstance(row["improvement"], dict) else {}
+    agent_name = improvement.get("agent_name", "")
+    experiment_created = row["created_at"]
+
+    # Get scores recorded AFTER the experiment was created, for the target agent
+    post_stats = await _get_agent_stats_since(agent_name, experiment_created)
     baseline = row["baseline_stats"] if isinstance(row["baseline_stats"], list) else []
 
-    # Compare average scores
-    baseline_avg = _avg_score(baseline)
-    current_avg = _avg_score(current_stats)
+    # Check minimum sample size
+    sample_count = post_stats.get("total_runs", 0) if post_stats else 0
+    if sample_count < min_samples:
+        return {
+            "experiment_id": experiment_id,
+            "status": "insufficient_data",
+            "sample_count": sample_count,
+            "min_required": min_samples,
+            "message": f"Only {sample_count} evaluations since experiment created (need {min_samples})",
+        }
+
+    # Compare the target agent's average score
+    baseline_avg = _avg_score_for_agent(baseline, agent_name)
+    current_avg = float(post_stats.get("avg_score", 0)) if post_stats else 0.0
     delta = current_avg - baseline_avg
 
-    if delta > 0.01:
+    # Use a more meaningful threshold — 3% improvement required
+    if delta > 0.03:
         verdict = "promoted"
-    elif delta < -0.01:
+    elif delta < -0.03:
         verdict = "rejected"
     else:
         verdict = "inconclusive"
@@ -137,27 +154,35 @@ async def evaluate_experiment(experiment_id: str, http_client=None) -> dict:
                 "WHERE experiment_id = :eid"
             ),
             {
-                "results": json.dumps(current_stats, default=str),
+                "results": json.dumps(post_stats, default=str),
                 "status": verdict,
-                "verdict": f"delta={delta:.4f}",
+                "verdict": f"delta={delta:.4f}, n={sample_count}, baseline={baseline_avg:.4f}, current={current_avg:.4f}",
                 "eid": experiment_id,
             },
         )
         await session.commit()
 
+    # If rejected, auto-rollback the override
+    if verdict == "rejected":
+        await rollback_experiment(experiment_id)
+
     logger.info("experiment_evaluated", extra={
         "experiment_id": experiment_id,
+        "agent": agent_name,
         "baseline_avg": baseline_avg,
         "current_avg": current_avg,
         "delta": delta,
+        "sample_count": sample_count,
         "verdict": verdict,
     })
 
     return {
         "experiment_id": experiment_id,
+        "agent_name": agent_name,
         "baseline_avg": round(baseline_avg, 4),
         "current_avg": round(current_avg, 4),
         "delta": round(delta, 4),
+        "sample_count": sample_count,
         "verdict": verdict,
     }
 
@@ -278,6 +303,24 @@ async def get_active_overrides() -> list[dict]:
         return [dict(r) for r in result.mappings()]
 
 
+async def get_active_override_for_agent(agent_name: str) -> str:
+    """Get the active prompt override for a specific agent. Returns empty string if none."""
+    # Normalize agent name — agents use names like "research_agent" but overrides
+    # store the short name like "research"
+    short_name = agent_name.replace("_agent", "")
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT override_value FROM prompt_overrides "
+                "WHERE agent_name IN (:full_name, :short_name) AND active = TRUE "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"full_name": agent_name, "short_name": short_name},
+        )
+        row = result.scalar()
+        return row or ""
+
+
 async def _store_experiment(experiment_id: str, improvement: dict, baseline_stats: list) -> None:
     """Persist a learning experiment."""
     async with async_session() as session:
@@ -306,6 +349,50 @@ def _avg_score(stats: list) -> float:
         if avg is not None:
             scores.append(float(avg))
     return sum(scores) / len(scores) if scores else 0.0
+
+
+def _avg_score_for_agent(stats: list, agent_name: str) -> float:
+    """Get the average score for a specific agent from a stats snapshot."""
+    if not stats or not agent_name:
+        return _avg_score(stats)
+    short_name = agent_name.replace("_agent", "")
+    for s in stats:
+        name = s.get("agent_name", "")
+        if name == agent_name or name == short_name or name.replace("_agent", "") == short_name:
+            avg = s.get("avg_score")
+            if avg is not None:
+                return float(avg)
+    # Fall back to global average if agent not found in baseline
+    return _avg_score(stats)
+
+
+async def _get_agent_stats_since(agent_name: str, since) -> dict | None:
+    """Get quality stats for a specific agent since a given timestamp."""
+    short_name = agent_name.replace("_agent", "") if agent_name else ""
+    async with async_session() as session:
+        result = await session.execute(
+            text("""
+                SELECT agent_name,
+                       COUNT(*) as total_runs,
+                       ROUND(AVG(total)::numeric, 4) as avg_score,
+                       ROUND(AVG(accuracy)::numeric, 4) as avg_accuracy,
+                       ROUND(AVG(relevance)::numeric, 4) as avg_relevance,
+                       ROUND(AVG(depth)::numeric, 4) as avg_depth,
+                       ROUND(AVG(clarity)::numeric, 4) as avg_clarity,
+                       ROUND(AVG(actionability)::numeric, 4) as avg_actionability,
+                       ROUND(AVG(consistency)::numeric, 4) as avg_consistency,
+                       SUM(CASE WHEN was_selected THEN 1 ELSE 0 END) as wins
+                FROM quality_metrics
+                WHERE created_at >= :since
+                  AND (agent_name = :full_name OR agent_name = :short_name)
+                GROUP BY agent_name
+                ORDER BY total_runs DESC
+                LIMIT 1
+            """),
+            {"since": since, "full_name": agent_name, "short_name": short_name},
+        )
+        row = result.mappings().fetchone()
+        return dict(row) if row else None
 
 
 def _parse_json(raw: str) -> dict:
