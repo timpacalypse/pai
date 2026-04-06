@@ -478,21 +478,181 @@ async def _execute_single_step(
 
 
 async def _execute_skill_step(step: dict, resolved_inputs: dict) -> dict:
-    """Execute a skill step. Stubbed for now — logs what would execute."""
+    """Execute a skill step using the skill registry.
+
+    Known skills call real services; unknown skills return stubs.
+    """
     skill_id = step.get("skill_id", "unknown")
     output_keys = step.get("outputs", [])
 
-    logger.info("skill_step_executed", extra={
+    logger.info("skill_step_executing", extra={
         "step_id": step["id"],
         "skill_id": skill_id,
         "inputs": {k: str(v)[:100] for k, v in resolved_inputs.items()},
     })
 
-    # Stub: return placeholder outputs
-    outputs = {}
-    for key in output_keys:
-        outputs[key] = f"[stub:{skill_id}:{key}]"
+    # Dispatch to real skill implementations where available
+    handler = _SKILL_REGISTRY.get(skill_id)
+    if handler:
+        outputs = await handler(resolved_inputs)
+    else:
+        # Stub: return placeholder outputs for unimplemented skills
+        outputs = {}
+        for key in output_keys:
+            outputs[key] = f"[stub:{skill_id}:{key}]"
+
     return outputs
+
+
+# ── Skill Registry ────────────────────────────────────────────
+
+
+async def _skill_weather_lookup(inputs: dict) -> dict:
+    from app.services.briefing_service import _get_weather
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        data = await _get_weather(client)
+    return {"weather_data": data}
+
+
+async def _skill_calendar_read(inputs: dict) -> dict:
+    from app.services.calendar_service import get_agenda
+    days = inputs.get("days", inputs.get("range", 7))
+    if isinstance(days, str):
+        days = 1 if days == "today" else 7
+    agenda = await get_agenda(days=int(days))
+    return {"calendar_events": str(agenda)}
+
+
+async def _skill_medical_records(inputs: dict) -> dict:
+    from app.services.medical_service import get_medical_records
+    member_id = inputs.get("family_member_id")
+    category = inputs.get("category")
+    records = await get_medical_records(
+        family_member_id=int(member_id) if member_id else None,
+        category=category,
+        limit=int(inputs.get("limit", 50)),
+    )
+    return {"medical_records": str(records)}
+
+
+async def _skill_home_items(inputs: dict) -> dict:
+    from app.services.home_knowledge_service import get_home_items, get_alerts, get_home_tasks
+    items = await get_home_items()
+    alerts = await get_alerts()
+    tasks = await get_home_tasks()
+    return {
+        "home_items": str(items),
+        "alerts": str(alerts),
+        "tasks": str(tasks),
+    }
+
+
+async def _skill_meal_history(inputs: dict) -> dict:
+    from app.services.meal_planner import get_meal_plans
+    from app.services.family_preference_service import build_preference_context
+    plans = await get_meal_plans(limit=int(inputs.get("limit", 4)))
+    prefs = await build_preference_context()
+    return {"meal_plans": str(plans), "preferences": prefs}
+
+
+async def _skill_web_search(inputs: dict) -> dict:
+    from app.services.web_search_service import search_and_extract
+    import httpx
+    query = inputs.get("query", "")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        results = await search_and_extract(query, max_results=inputs.get("max_results", 5), http_client=client)
+    return {"search_results": [r.to_dict() if hasattr(r, 'to_dict') else str(r) for r in results]}
+
+
+async def _skill_email_send(inputs: dict) -> dict:
+    import smtplib
+    from email.mime.text import MIMEText
+    from app.core.config import settings
+    to_addr = inputs.get("to", [])
+    if isinstance(to_addr, list):
+        to_addr = to_addr[0] if to_addr else ""
+    subject = inputs.get("subject", "PAI Process Output")
+    body = inputs.get("body", "")
+    if not (to_addr and subject and body and settings.gmail_address and settings.gmail_app_password):
+        return {"send_confirmation": False, "reason": "Missing to/subject/body or gmail config"}
+    try:
+        msg = MIMEText(str(body), "plain")
+        msg["Subject"] = subject
+        msg["From"] = f"PAI Process <{settings.gmail_address}>"
+        msg["To"] = to_addr
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(settings.gmail_address, settings.gmail_app_password)
+            server.send_message(msg)
+        return {"send_confirmation": True}
+    except Exception as e:
+        logger.error("skill_email_send_failed", extra={"error": str(e)})
+        return {"send_confirmation": False, "reason": str(e)}
+
+
+async def _skill_email_read(inputs: dict) -> dict:
+    import asyncio
+    from app.services.briefing_service import _read_gmail_inbox
+    summaries = await asyncio.to_thread(_read_gmail_inbox)
+    return {"email_summaries": summaries}
+
+
+async def _skill_memory_query(inputs: dict) -> dict:
+    """Query semantic or episodic memory."""
+    from app.memory.semantic import search_semantic
+    query = inputs.get("query", "")
+    limit = int(inputs.get("limit", 5))
+    results = await search_semantic(query, limit=limit)
+    return {"memory_results": str(results)}
+
+
+async def _skill_memory_store(inputs: dict) -> dict:
+    """Store content into semantic memory."""
+    from app.memory.semantic import store_semantic
+    content = inputs.get("content", "")
+    category = inputs.get("category", "process_output")
+    if content:
+        row_id = await store_semantic(
+            content=str(content),
+            source=f"process_engine:{category}",
+            metadata={"category": category},
+        )
+        return {"stored": row_id > 0}
+    return {"stored": False}
+
+
+async def _skill_identity_goals(inputs: dict) -> dict:
+    """Fetch goals from identity_memory for a role or all roles."""
+    from sqlalchemy import text as sql_text
+    role = inputs.get("role", "")
+    async with async_session() as session:
+        if role:
+            result = await session.execute(
+                sql_text("SELECT key, value FROM identity_memory WHERE category = 'goals' AND key ILIKE :role"),
+                {"role": f"%{role}%"},
+            )
+        else:
+            result = await session.execute(
+                sql_text("SELECT key, value FROM identity_memory WHERE category = 'goals'"),
+            )
+        rows = [dict(r) for r in result.mappings().all()]
+    return {"goals": rows}
+
+
+_SKILL_REGISTRY: dict[str, callable] = {
+    "weather_lookup": _skill_weather_lookup,
+    "calendar_read": _skill_calendar_read,
+    "medical_records": _skill_medical_records,
+    "home_items": _skill_home_items,
+    "home_alerts": _skill_home_items,  # alias
+    "meal_history": _skill_meal_history,
+    "web_search": _skill_web_search,
+    "email_send": _skill_email_send,
+    "email_read": _skill_email_read,
+    "memory_query": _skill_memory_query,
+    "memory_store": _skill_memory_store,
+    "identity_goals": _skill_identity_goals,
+}
 
 
 async def _execute_agent_step(
@@ -886,9 +1046,231 @@ DAILY_BRIEF_DEFINITION = {
 }
 
 
+THREAT_INTEL_DIGEST_DEFINITION = {
+    "process_id": "threat_intel_digest",
+    "name": "Threat Intelligence Digest",
+    "description": "Searches latest cyber threats, filters by relevance, scores by urgency, and emails a digest",
+    "roles": ["cybersecurity_executive", "ai_cybersecurity_strategist"],
+    "trigger_config": {"type": "scheduled", "cron": "0 7 * * *"},
+    "steps": [
+        {"id": "search_cves", "type": "skill", "name": "Search latest CVEs & advisories",
+         "skill_id": "web_search",
+         "inputs": {"query": "latest critical CVE vulnerability advisory 2026", "max_results": 8},
+         "outputs": ["search_results"], "parallel_group": "gather"},
+        {"id": "search_threats", "type": "skill", "name": "Search emerging cyber threats",
+         "skill_id": "web_search",
+         "inputs": {"query": "emerging cyber threat ransomware zero-day 2026", "max_results": 8},
+         "outputs": ["search_results"], "parallel_group": "gather"},
+        {"id": "search_ai_sec", "type": "skill", "name": "Search AI security news",
+         "skill_id": "web_search",
+         "inputs": {"query": "AI security LLM vulnerability adversarial attack 2026", "max_results": 8},
+         "outputs": ["search_results"], "parallel_group": "gather"},
+        {"id": "analyze", "type": "agent", "name": "Analyze and score threats",
+         "agent": "analysis",
+         "inputs": {
+             "cve_results": "steps.search_cves.search_results",
+             "threat_results": "steps.search_threats.search_results",
+             "ai_results": "steps.search_ai_sec.search_results",
+             "task": "Analyze these threat intelligence results. For each threat: score urgency (critical/high/medium/low), assess business impact for an enterprise cybersecurity program, and identify required actions. Group by urgency level. Focus on threats relevant to federal government and defense sectors.",
+         },
+         "outputs": ["threat_analysis"]},
+        {"id": "plan_response", "type": "agent", "name": "Plan response actions",
+         "agent": "planning",
+         "inputs": {
+             "threats": "steps.analyze.threat_analysis",
+             "task": "Based on the threat analysis, create a prioritized action plan. For critical/high threats, identify immediate mitigations. For medium threats, identify monitoring actions. Produce a concise executive-level digest suitable for email.",
+         },
+         "outputs": ["action_plan", "digest_text"]},
+        {"id": "store_results", "type": "skill", "name": "Store analysis in memory",
+         "skill_id": "memory_store",
+         "inputs": {"content": "steps.plan_response.digest_text", "category": "threat_intel"},
+         "outputs": ["stored"]},
+        {"id": "send_digest", "type": "skill", "name": "Email threat digest",
+         "skill_id": "email_send",
+         "inputs": {
+             "to": ["mclaurint@gmail.com"],
+             "subject": "PAI Threat Intelligence Digest",
+             "body": "steps.plan_response.digest_text",
+         },
+         "outputs": ["send_confirmation"]},
+    ],
+}
+
+
+FITNESS_HEALTH_REVIEW_DEFINITION = {
+    "process_id": "fitness_health_review",
+    "name": "Weekly Fitness & Health Review",
+    "description": "Reviews medical records, meal plans, and fitness data to produce a weekly health summary with recommendations",
+    "roles": ["fitness_longevity_optimist", "family_chef"],
+    "trigger_config": {"type": "scheduled", "cron": "0 8 * * 0"},
+    "steps": [
+        {"id": "get_medical", "type": "skill", "name": "Pull recent medical records",
+         "skill_id": "medical_records",
+         "inputs": {"limit": 20},
+         "outputs": ["medical_records"], "parallel_group": "gather"},
+        {"id": "get_meals", "type": "skill", "name": "Pull meal plan history",
+         "skill_id": "meal_history",
+         "inputs": {"limit": 4},
+         "outputs": ["meal_plans", "preferences"], "parallel_group": "gather"},
+        {"id": "get_calendar", "type": "skill", "name": "Check upcoming health appointments",
+         "skill_id": "calendar_read",
+         "inputs": {"days": 30},
+         "outputs": ["calendar_events"], "parallel_group": "gather"},
+        {"id": "analyze_health", "type": "agent", "name": "Analyze health trends",
+         "agent": "analysis",
+         "inputs": {
+             "medical_records": "steps.get_medical.medical_records",
+             "meal_history": "steps.get_meals.meal_plans",
+             "food_preferences": "steps.get_meals.preferences",
+             "upcoming_appointments": "steps.get_calendar.calendar_events",
+             "task": "Analyze the health data. Review: 1) Recent medical records for trends or concerns, 2) Meal plans for nutritional balance and variety, 3) Upcoming health appointments. Identify patterns, gaps in nutrition, and health risks. Consider long-term longevity goals.",
+         },
+         "outputs": ["health_analysis"]},
+        {"id": "plan_adjustments", "type": "agent", "name": "Plan next week adjustments",
+         "agent": "planning",
+         "inputs": {
+             "analysis": "steps.analyze_health.health_analysis",
+             "preferences": "steps.get_meals.preferences",
+             "task": "Based on the health analysis, create specific actionable recommendations for next week: 1) Nutrition adjustments (meals to add/avoid), 2) Exercise recommendations (type, frequency, duration), 3) Health habits to start/stop, 4) Follow-up items for medical care. Keep it practical and sustainable. Format as a clear email summary.",
+         },
+         "outputs": ["weekly_plan", "email_body"]},
+        {"id": "store", "type": "skill", "name": "Store analysis in memory",
+         "skill_id": "memory_store",
+         "inputs": {"content": "steps.plan_adjustments.weekly_plan", "category": "health_review"},
+         "outputs": ["stored"]},
+        {"id": "send_review", "type": "skill", "name": "Email weekly review",
+         "skill_id": "email_send",
+         "inputs": {
+             "to": ["mclaurint@gmail.com"],
+             "subject": "PAI Weekly Health & Fitness Review",
+             "body": "steps.plan_adjustments.email_body",
+         },
+         "outputs": ["send_confirmation"]},
+    ],
+}
+
+
+HOME_MAINTENANCE_AUDIT_DEFINITION = {
+    "process_id": "home_maintenance_audit",
+    "name": "Home Maintenance Audit",
+    "description": "Audits all home items and tasks, identifies overdue/upcoming maintenance, researches DIY guides, and emails a prioritized action list",
+    "roles": ["family_activity_coordinator"],
+    "trigger_config": {"type": "scheduled", "cron": "0 9 1 * *"},
+    "steps": [
+        {"id": "get_home_data", "type": "skill", "name": "Query all home items and tasks",
+         "skill_id": "home_items",
+         "inputs": {},
+         "outputs": ["home_items", "alerts", "tasks"]},
+        {"id": "analyze_maintenance", "type": "agent", "name": "Analyze maintenance status",
+         "agent": "analysis",
+         "inputs": {
+             "items": "steps.get_home_data.home_items",
+             "alerts": "steps.get_home_data.alerts",
+             "tasks": "steps.get_home_data.tasks",
+             "task": "Analyze the home maintenance data. Categorize items by: 1) OVERDUE — tasks past their due date, 2) DUE SOON — tasks due in next 30 days, 3) ON TRACK — maintained items, 4) UNTRACKED — items with no maintenance schedule. For each overdue/due-soon item, assess urgency and potential consequences of delay. Consider seasonal factors.",
+         },
+         "outputs": ["maintenance_analysis"]},
+        {"id": "research_fixes", "type": "skill", "name": "Research DIY guides for top items",
+         "skill_id": "web_search",
+         "inputs": {"query": "home maintenance DIY guide HVAC filter furnace water heater", "max_results": 5},
+         "outputs": ["search_results"]},
+        {"id": "plan_actions", "type": "agent", "name": "Create prioritized action plan",
+         "agent": "planning",
+         "inputs": {
+             "analysis": "steps.analyze_maintenance.maintenance_analysis",
+             "diy_guides": "steps.research_fixes.search_results",
+             "task": "Create a prioritized home maintenance action plan. For each item: 1) Priority (urgent/soon/routine), 2) Estimated time to complete, 3) DIY vs professional recommendation, 4) Estimated cost range. Group by property (if multiple homes). Format as a clear email with an actionable checklist.",
+         },
+         "outputs": ["action_plan", "email_body"]},
+        {"id": "store", "type": "skill", "name": "Store audit in memory",
+         "skill_id": "memory_store",
+         "inputs": {"content": "steps.plan_actions.action_plan", "category": "home_audit"},
+         "outputs": ["stored"]},
+        {"id": "send_audit", "type": "skill", "name": "Email audit report",
+         "skill_id": "email_send",
+         "inputs": {
+             "to": ["mclaurint@gmail.com"],
+             "subject": "PAI Home Maintenance Audit",
+             "body": "steps.plan_actions.email_body",
+         },
+         "outputs": ["send_confirmation"]},
+    ],
+}
+
+
+LEARNING_PATH_DEFINITION = {
+    "process_id": "learning_path_generator",
+    "name": "Learning Path Generator",
+    "description": "Takes a topic, researches best resources, builds a structured curriculum, and stores it for progressive learning",
+    "roles": ["polymath_in_training", "educator_scholar"],
+    "trigger_config": {"type": "manual"},
+    "steps": [
+        {"id": "get_goals", "type": "skill", "name": "Fetch learning goals",
+         "skill_id": "identity_goals",
+         "inputs": {"role": "polymath_in_training"},
+         "outputs": ["goals"]},
+        {"id": "search_courses", "type": "skill", "name": "Search online courses & resources",
+         "skill_id": "web_search",
+         "inputs": {"query": "trigger.topic", "max_results": 8},
+         "outputs": ["search_results"], "parallel_group": "research"},
+        {"id": "search_papers", "type": "skill", "name": "Search academic papers & books",
+         "skill_id": "web_search",
+         "inputs": {"query": "trigger.topic_academic", "max_results": 8},
+         "outputs": ["search_results"], "parallel_group": "research"},
+        {"id": "check_existing", "type": "skill", "name": "Check what I already know",
+         "skill_id": "memory_query",
+         "inputs": {"query": "trigger.topic", "limit": 5},
+         "outputs": ["memory_results"], "parallel_group": "research"},
+        {"id": "analyze_resources", "type": "agent", "name": "Evaluate and rank resources",
+         "agent": "analysis",
+         "inputs": {
+             "courses": "steps.search_courses.search_results",
+             "papers": "steps.search_papers.search_results",
+             "existing_knowledge": "steps.check_existing.memory_results",
+             "goals": "steps.get_goals.goals",
+             "task": "Evaluate these learning resources for the topic. Rank by: 1) Quality and depth, 2) Relevance to polymath goals, 3) Prerequisites (what I already know vs need), 4) Time investment. Identify the best combination of theoretical + practical resources. Flag any gaps where no good resource was found.",
+         },
+         "outputs": ["resource_analysis"]},
+        {"id": "build_curriculum", "type": "agent", "name": "Design structured learning path",
+         "agent": "planning",
+         "inputs": {
+             "resources": "steps.analyze_resources.resource_analysis",
+             "existing_knowledge": "steps.check_existing.memory_results",
+             "task": "Design a structured learning path with: 1) Phases (foundation → intermediate → advanced → synthesis), 2) Specific resources per phase with time estimates, 3) Milestones and self-assessment checkpoints, 4) Cross-domain connections to other knowledge areas, 5) Weekly time commitment recommendation. Make it progressive and sustainable.",
+         },
+         "outputs": ["curriculum", "summary"]},
+        {"id": "gate_review", "type": "gate", "name": "Review curriculum before saving",
+         "gate_message": "Review the learning path before it's saved to memory",
+         "inputs": {"curriculum": "steps.build_curriculum.curriculum"}},
+        {"id": "store_curriculum", "type": "skill", "name": "Save to semantic memory",
+         "skill_id": "memory_store",
+         "inputs": {"content": "steps.build_curriculum.curriculum", "category": "learning_path"},
+         "outputs": ["stored"]},
+        {"id": "send_plan", "type": "skill", "name": "Email learning path",
+         "skill_id": "email_send",
+         "inputs": {
+             "to": ["mclaurint@gmail.com"],
+             "subject": "PAI Learning Path: New Curriculum",
+             "body": "steps.build_curriculum.summary",
+         },
+         "outputs": ["send_confirmation"]},
+    ],
+}
+
+
+_SEED_DEFINITIONS = [
+    DAILY_BRIEF_DEFINITION,
+    THREAT_INTEL_DIGEST_DEFINITION,
+    FITNESS_HEALTH_REVIEW_DEFINITION,
+    HOME_MAINTENANCE_AUDIT_DEFINITION,
+    LEARNING_PATH_DEFINITION,
+]
+
+
 async def seed_process_definitions() -> None:
     """Seed built-in process definitions if they don't exist."""
-    existing = await get_process_definition("daily_brief")
-    if not existing:
-        await create_process_definition(DAILY_BRIEF_DEFINITION)
-        logger.info("seeded_process_definition", extra={"process_id": "daily_brief"})
+    for defn in _SEED_DEFINITIONS:
+        existing = await get_process_definition(defn["process_id"])
+        if not existing:
+            await create_process_definition(defn)
+            logger.info("seeded_process_definition", extra={"process_id": defn["process_id"]})

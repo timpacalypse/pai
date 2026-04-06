@@ -154,13 +154,21 @@ async def get_events(
     category: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Get calendar events, optionally filtered."""
+    """Get calendar events, optionally filtered. Handles recurring events."""
     conditions = []
     params: dict = {"limit": limit}
 
     if upcoming_days is not None:
+        # Match non-recurring events in the date range
+        # PLUS recurring events whose month/day fall within the range
+        days_int = int(upcoming_days)
         conditions.append(
-            f"e.event_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '{int(upcoming_days)} days'"
+            f"(e.event_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '{days_int} days'"
+            f" OR (e.recurrence = 'yearly'"
+            f"     AND (EXTRACT(MONTH FROM e.event_date) * 100 + EXTRACT(DAY FROM e.event_date))"
+            f"         BETWEEN (EXTRACT(MONTH FROM CURRENT_DATE) * 100 + EXTRACT(DAY FROM CURRENT_DATE))"
+            f"             AND (EXTRACT(MONTH FROM CURRENT_DATE + INTERVAL '{days_int} days') * 100"
+            f"                  + EXTRACT(DAY FROM CURRENT_DATE + INTERVAL '{days_int} days'))))"
         )
     if family_member_id:
         conditions.append("e.family_member_id = :member_id")
@@ -235,16 +243,17 @@ async def get_agenda(days: int = 7) -> dict:
 
 
 async def build_calendar_context(days: int = 14) -> str:
-    """Build plain-text agenda for chat context."""
+    """Build plain-text agenda for chat context. Always returns a message."""
     events = await get_events(upcoming_days=days)
     if not events:
-        return ""
+        return f"Calendar: No upcoming events in the next {days} days."
     lines = [f"Upcoming events (next {days} days):"]
     for e in events:
         date_str = str(e["event_date"])
         time_str = f" at {e['event_time']}" if e.get("event_time") else ""
         who = f" ({e['family_member_name']})" if e.get("family_member_name", "family") != "family" else ""
-        lines.append(f"  {date_str}{time_str}: {e['title']}{who}")
+        recur = f" [repeats {e['recurrence']}]" if e.get("recurrence", "none") != "none" else ""
+        lines.append(f"  {date_str}{time_str}: {e['title']}{who}{recur}")
         if e.get("location"):
             lines.append(f"    Location: {e['location']}")
     return "\n".join(lines)

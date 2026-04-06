@@ -645,10 +645,10 @@ async def _gather_skill_context_by_type(context_types: list[str]) -> list[str]:
         try:
             from app.services.calendar_service import build_calendar_context
             cal_ctx = await build_calendar_context(days=14)
-            if cal_ctx:
-                context.append(cal_ctx)
-        except Exception:
-            pass
+            context.append(cal_ctx)  # always has content (explicit "no events" message)
+        except Exception as e:
+            logger.warning(f"Calendar context failed: {e}")
+            context.append("Calendar: Unable to retrieve calendar data.")
 
     return context
 
