@@ -1,0 +1,524 @@
+"""Unified skill registry — makes all capabilities accessible via natural language.
+
+Each skill registers with a name, description, and handlers for read/write actions.
+The LLM intent classifier uses this registry dynamically, so new skills are
+automatically accessible without changing routing code.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from typing import Callable, Awaitable
+
+logger = logging.getLogger("pai.skill_registry")
+
+
+@dataclass
+class Skill:
+    """A registered skill that can be invoked via natural language."""
+    id: str                           # unique identifier (e.g. "calendar")
+    name: str                         # human-readable name
+    description: str                  # what this skill does (shown to LLM)
+    examples: list[str]               # example queries that trigger this skill
+    read_handler: Callable | None = None    # async fn(message, http_client) -> str
+    write_handler: Callable | None = None   # async fn(message, http_client) -> str
+    category: str = "general"         # grouping for display
+
+
+_REGISTRY: dict[str, Skill] = {}
+
+
+def register_skill(skill: Skill) -> None:
+    """Register a skill in the global registry."""
+    _REGISTRY[skill.id] = skill
+    logger.info("skill_registered", extra={"skill_id": skill.id, "skill_name": skill.name})
+    # Invalidate cached classifier prompt
+    try:
+        from app.services.llm_intent_service import invalidate_classifier_cache
+        invalidate_classifier_cache()
+    except ImportError:
+        pass
+
+
+def get_skill(skill_id: str) -> Skill | None:
+    return _REGISTRY.get(skill_id)
+
+
+def list_skills() -> list[Skill]:
+    return list(_REGISTRY.values())
+
+
+def build_skill_catalog() -> str:
+    """Build a compact catalog of skills for the LLM classifier prompt."""
+    lines = []
+    for skill in _REGISTRY.values():
+        ex = skill.examples[0] if skill.examples else ""
+        lines.append(f'  - "{skill.id}" — {skill.description} (e.g. "{ex}")')
+    return "\n".join(lines)
+
+
+# ── Built-in skill registrations ──────────────────────────────
+
+
+def register_all_skills():
+    """Register all built-in skills. Called once at startup."""
+
+    # ── Calendar ──
+    async def _calendar_read(message, http_client=None):
+        from app.services.calendar_service import build_calendar_context
+        return await build_calendar_context(days=14)
+
+    async def _calendar_write(message, http_client=None):
+        from app.services.calendar_service import process_calendar_input
+        result = await process_calendar_input(message, http_client=http_client)
+        if result.get("error"):
+            return f"Calendar error: {result['error']}"
+        actions = result.get("actions", [])
+        return " | ".join(actions) if actions else "Added to calendar."
+
+    register_skill(Skill(
+        id="calendar",
+        name="Calendar & Events",
+        description="View upcoming events, add/schedule appointments, check agenda (includes Google Calendar)",
+        examples=["what's on my calendar tomorrow", "add dentist appointment Thursday at 2pm", "when is the next meeting"],
+        read_handler=_calendar_read,
+        write_handler=_calendar_write,
+        category="family",
+    ))
+
+    # ── Medical Records ──
+    async def _medical_read(message, http_client=None):
+        from app.services.medical_service import build_medical_context
+        return await build_medical_context()
+
+    async def _medical_write(message, http_client=None):
+        from app.services.medical_service import process_medical_input
+        result = await process_medical_input(message, http_client=http_client)
+        if result.get("error"):
+            return f"Medical record error: {result['error']}"
+        actions = result.get("actions", [])
+        return " | ".join(actions) if actions else f"Recorded medical entry for {result.get('family_member', 'unknown')}."
+
+    register_skill(Skill(
+        id="medical",
+        name="Medical Records",
+        description="Log medical visits, medications, health data; query health history for any family member",
+        examples=["log colonoscopy results from Dr. Smith", "what medications is mom on", "show medical records for Tim"],
+        read_handler=_medical_read,
+        write_handler=_medical_write,
+        category="family",
+    ))
+
+    # ── Home Knowledge ──
+    async def _home_read(message, http_client=None):
+        from app.services.home_knowledge_service import get_alerts, get_home_tasks, get_home_items
+        alerts = await get_alerts()
+        parts = []
+        if alerts["overdue"]:
+            parts.append("OVERDUE maintenance:\n" + "\n".join(
+                f"  - {t['item_name']}: {t['description']} (due {t.get('next_due_at', 'N/A')})"
+                for t in alerts["overdue"]
+            ))
+        if alerts["upcoming"]:
+            parts.append("Upcoming maintenance:\n" + "\n".join(
+                f"  - {t['item_name']}: {t['description']} (due {t.get('next_due_at', 'N/A')})"
+                for t in alerts["upcoming"]
+            ))
+        items = await get_home_items()
+        if items:
+            parts.append(f"Home items tracked: {len(items)}")
+            for item in items[:10]:
+                parts.append(f"  - {item['name']} ({item.get('category', 'general')}): {item.get('location', '')}")
+        return "\n".join(parts) if parts else "No home items or maintenance tasks tracked yet."
+
+    async def _home_write(message, http_client=None):
+        from app.services.home_knowledge_service import process_natural_input
+        result = await process_natural_input(user_text=message, http_client=http_client)
+        if result.get("error"):
+            return f"Home record error: {result['error']}"
+        actions = result.get("actions", [])
+        return " | ".join(actions) if actions else "Saved to the home database."
+
+    register_skill(Skill(
+        id="home",
+        name="Home Knowledge Base",
+        description="Track home appliances, maintenance schedules, property info; log repairs and tasks; check overdue maintenance",
+        examples=["add HVAC filter changed today", "what maintenance is overdue", "show all home items"],
+        read_handler=_home_read,
+        write_handler=_home_write,
+        category="family",
+    ))
+
+    # ── Meal Planning ──
+    async def _meal_read(message, http_client=None):
+        from app.services.meal_planner import get_meal_plans
+        from app.services.family_preference_service import build_preference_context
+        parts = []
+        prefs = await build_preference_context()
+        if prefs and "No family members" not in prefs:
+            parts.append(prefs)
+        plans = await get_meal_plans(limit=2)
+        for plan in plans:
+            week = plan.get("plan", {}).get("week", [])
+            if week:
+                dinners = [f"  {d.get('day','')}: {d.get('dinner','?')}" for d in week if isinstance(d, dict)]
+                parts.append(f"Meal plan ({plan.get('week_label','')}):\n" + "\n".join(dinners))
+        return "\n".join(parts) if parts else "No meal plans generated yet."
+
+    async def _meal_write(message, http_client=None):
+        from app.services.meal_planner import generate_meal_plan
+        result = await generate_meal_plan(http_client=http_client)
+        if result.get("error"):
+            return f"Meal plan error: {result['error']}"
+        week = result.get("plan", {}).get("week", [])
+        if week:
+            dinners = [f"  {d.get('day','')}: {d.get('dinner','?')}" for d in week if isinstance(d, dict)]
+            return "Generated new meal plan:\n" + "\n".join(dinners)
+        return "Meal plan generated."
+
+    register_skill(Skill(
+        id="meal_planning",
+        name="Meal Planning",
+        description="Generate weekly meal plans based on family preferences; view current/past meal plans; manage food preferences",
+        examples=["generate a meal plan for this week", "what's for dinner this week", "show current meal plan"],
+        read_handler=_meal_read,
+        write_handler=_meal_write,
+        category="family",
+    ))
+
+    # ── Recipes ──
+    async def _recipe_read(message, http_client=None):
+        from app.services.recipe_service import get_recipes
+        recipes = await get_recipes(search=message, limit=10)
+        if not recipes:
+            return "No recipes found matching that query."
+        lines = [f"Found {len(recipes)} recipe(s):"]
+        for r in recipes:
+            rating = f" (rating: {r['avg_rating']:.1f})" if r.get("avg_rating") else ""
+            lines.append(f"  - {r['title']} [{r.get('cuisine','')}]{rating}")
+        return "\n".join(lines)
+
+    async def _recipe_write(message, http_client=None):
+        from app.services.recipe_service import save_recipe
+        from app.services.ollama_service import generate
+        # Use LLM to extract recipe from natural language
+        raw = await generate(
+            prompt=f"Extract a recipe from this message and return JSON with keys: title, cuisine, prep_time_min, cook_time_min, servings, ingredients (list of strings), instructions (list of strings), notes. Message: {message}",
+            system_prompt="You are a recipe parser. Return only valid JSON.",
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        import json
+        try:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = "\n".join(l for l in text.split("\n") if not l.strip().startswith("```"))
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            recipe_data = json.loads(text[start:end]) if start >= 0 else {}
+        except Exception:
+            return "I couldn't parse that as a recipe. Try providing title, ingredients, and instructions."
+        if not recipe_data.get("title"):
+            return "I need at least a recipe title to save."
+        result = await save_recipe(recipe_data)
+        return f"Saved recipe: {result.get('title', 'unknown')}"
+
+    register_skill(Skill(
+        id="recipes",
+        name="Recipe Collection",
+        description="Save, search, and manage recipes; find recipes by cuisine or ingredient",
+        examples=["save this recipe for chicken tikka masala", "find pasta recipes", "show my saved recipes"],
+        read_handler=_recipe_read,
+        write_handler=_recipe_write,
+        category="family",
+    ))
+
+    # ── Briefing ──
+    async def _briefing_read(message, http_client=None):
+        from app.services.briefing_service import build_daily_briefing, build_briefing_text
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            briefing = await build_daily_briefing(client)
+        return build_briefing_text(briefing)
+
+    async def _briefing_write(message, http_client=None):
+        from app.services.briefing_service import send_daily_briefing
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            sent = await send_daily_briefing(client)
+        return "Daily briefing sent to your email." if sent else "Failed to send briefing — check Gmail configuration."
+
+    register_skill(Skill(
+        id="briefing",
+        name="Daily Briefing",
+        description="Build or send the daily intelligence briefing (weather, calendar, news, email summary)",
+        examples=["give me my daily briefing", "send the morning briefing email", "what's my day look like"],
+        read_handler=_briefing_read,
+        write_handler=_briefing_write,
+        category="professional",
+    ))
+
+    # ── Web Research ──
+    async def _research_read(message, http_client=None):
+        from app.services.article_dedup import get_ledger_stats
+        stats = await get_ledger_stats()
+        return f"Research stats: {stats.get('total_articles', 0)} articles collected, {stats.get('sources', 0)} unique sources."
+
+    async def _research_write(message, http_client=None):
+        from app.services.web_search_service import search_and_extract
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            results = await search_and_extract(message, max_results=5, http_client=client)
+        if not results:
+            return "No results found."
+        lines = [f"Found {len(results)} results:"]
+        for r in results:
+            d = r.to_dict() if hasattr(r, 'to_dict') else {"title": str(r)}
+            lines.append(f"  - {d.get('title', 'Untitled')}: {d.get('snippet', '')[:120]}")
+            if d.get('url'):
+                lines.append(f"    {d['url']}")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="web_research",
+        name="Web Research",
+        description="Search the web for information, articles, news; check research article stats",
+        examples=["search for latest AI security news", "research quantum computing advances", "how many articles have been collected"],
+        read_handler=_research_read,
+        write_handler=_research_write,
+        category="professional",
+    ))
+
+    # ── Document Ingestion ──
+    async def _ingest_write(message, http_client=None):
+        from app.services.document_ingestion import ingest_url, ingest_text
+        msg = message.strip()
+        # Check if it's a URL
+        if msg.startswith("http://") or msg.startswith("https://"):
+            result = await ingest_url(msg, http_client=http_client)
+            return f"Ingested URL: {result.get('title', msg)} ({result.get('chunks', 0)} chunks stored)"
+        else:
+            result = await ingest_text(msg, source="chat")
+            return f"Ingested text ({result.get('chunks', 0)} chunks stored in memory)"
+
+    register_skill(Skill(
+        id="document_ingestion",
+        name="Document Ingestion",
+        description="Ingest a URL or text into the knowledge base / semantic memory for future reference",
+        examples=["ingest this article https://example.com/article", "remember this: the server password is...", "save this to memory"],
+        read_handler=None,
+        write_handler=_ingest_write,
+        category="professional",
+    ))
+
+    # ── Family Members ──
+    async def _family_read(message, http_client=None):
+        from app.services.family_preference_service import get_family_members, get_preferences
+        members = await get_family_members()
+        if not members:
+            return "No family members registered yet."
+        lines = ["Family members:"]
+        for m in members:
+            prefs = await get_preferences(m["id"])
+            pref_str = ", ".join(f"{p['preference_type']}: {p['value']}" for p in prefs) if prefs else "no preferences set"
+            lines.append(f"  - {m['name']} (age {m.get('age', '?')}): {pref_str}")
+        return "\n".join(lines)
+
+    async def _family_write(message, http_client=None):
+        from app.services.family_preference_service import add_family_member
+        from app.services.ollama_service import generate
+        import json
+        raw = await generate(
+            prompt=f"Extract family member info from this message. Return JSON: {{\"name\": \"...\", \"age\": N, \"dietary_restrictions\": \"...\", \"notes\": \"...\"}}. Message: {message}",
+            system_prompt="Extract structured data. Return only valid JSON.",
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        try:
+            text = raw.strip()
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            data = json.loads(text[start:end]) if start >= 0 else {}
+        except Exception:
+            return "Couldn't parse family member info. Try: 'add family member John, age 12, allergic to peanuts'"
+        if not data.get("name"):
+            return "I need at least a name."
+        result = await add_family_member(data)
+        return f"Added family member: {result.get('name', 'unknown')}"
+
+    register_skill(Skill(
+        id="family",
+        name="Family Members & Preferences",
+        description="Add/view family members, set dietary restrictions and food preferences",
+        examples=["show family members", "add family member Sarah age 8", "set Tim's preference to no gluten"],
+        read_handler=_family_read,
+        write_handler=_family_write,
+        category="family",
+    ))
+
+    # ── Meal Feedback ──
+    async def _feedback_read(message, http_client=None):
+        from app.services.meal_planner import get_meal_ratings
+        ratings = await get_meal_ratings(limit=10)
+        if not ratings:
+            return "No meal ratings recorded yet."
+        lines = ["Recent meal ratings:"]
+        for r in ratings:
+            lines.append(f"  - {r.get('meal_name', '?')}: {r.get('rating', '?')}/5 — {r.get('notes', '')}")
+        return "\n".join(lines)
+
+    async def _feedback_write(message, http_client=None):
+        from app.services.meal_planner import rate_meal
+        from app.services.ollama_service import generate
+        import json
+        raw = await generate(
+            prompt=f'Extract meal rating from this message. Return JSON: {{"meal_name": "...", "rating": 1-5, "notes": "..."}}. Message: {message}',
+            system_prompt="Extract structured data. Return only valid JSON.",
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        try:
+            text = raw.strip()
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            data = json.loads(text[start:end]) if start >= 0 else {}
+        except Exception:
+            return "Couldn't parse that rating. Try: 'rate the chicken pasta 4 out of 5, it was great'"
+        result = await rate_meal(data)
+        return f"Rated {data.get('meal_name', 'meal')}: {data.get('rating', '?')}/5"
+
+    register_skill(Skill(
+        id="meal_feedback",
+        name="Meal Ratings & Feedback",
+        description="Rate meals, view past meal ratings and feedback",
+        examples=["rate tonight's dinner 4 out of 5", "show meal ratings", "the pasta was terrible, 2 stars"],
+        read_handler=_feedback_read,
+        write_handler=_feedback_write,
+        category="family",
+    ))
+
+    # ── Learning & Quality ──
+    async def _learning_read(message, http_client=None):
+        from app.services.quality_service import get_agent_stats
+        from app.services.learning_service import get_experiments, get_active_overrides
+        stats = await get_agent_stats()
+        experiments = await get_experiments(limit=5)
+        overrides = await get_active_overrides()
+        parts = []
+        if stats:
+            parts.append("Agent quality stats:\n" + "\n".join(
+                f"  - {s.get('agent_name', '?')}: avg={s.get('avg_score', 0):.2f}, tasks={s.get('task_count', 0)}"
+                for s in stats
+            ))
+        if experiments:
+            parts.append(f"Recent experiments: {len(experiments)}")
+        if overrides:
+            parts.append(f"Active prompt overrides: {len(overrides)}")
+        return "\n".join(parts) if parts else "No quality data collected yet."
+
+    register_skill(Skill(
+        id="learning",
+        name="Learning & Quality",
+        description="View agent performance metrics, quality stats, learning experiments, and prompt overrides",
+        examples=["how are the agents performing", "show quality stats", "any active learning experiments"],
+        read_handler=_learning_read,
+        write_handler=None,
+        category="professional",
+    ))
+
+    # ── Memory ──
+    async def _memory_read(message, http_client=None):
+        from app.memory.semantic import search_semantic
+        results = await search_semantic(message, limit=5, http_client=http_client)
+        if not results:
+            return "No relevant memories found."
+        lines = ["Relevant memories:"]
+        for r in results:
+            sim = f" (similarity: {r['similarity']:.2f})" if r.get("similarity") else ""
+            lines.append(f"  - {r['content'][:200]}{sim}")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="memory",
+        name="Knowledge Memory",
+        description="Search the knowledge base / semantic memory for previously stored information",
+        examples=["what do you know about kubernetes", "search memory for cybersecurity", "recall what we discussed about AI governance"],
+        read_handler=_memory_read,
+        write_handler=None,
+        category="professional",
+    ))
+
+    logger.info("all_skills_registered", extra={"count": len(_REGISTRY)})
+
+
+async def register_process_skills():
+    """Auto-register process definitions as skills so they're accessible via chat."""
+    from app.services.process_engine import list_process_definitions, start_process
+
+    processes = await list_process_definitions()
+    for proc in processes:
+        proc_id = proc["process_id"]
+        proc_name = proc["name"]
+        proc_desc = proc.get("description", proc_name)
+        steps = proc.get("steps", [])
+        step_names = [s.get("name", s.get("id", "?")) for s in steps]
+        trigger = proc.get("trigger_config", {}).get("type", "manual")
+
+        # Build examples from the process name words
+        name_words = proc_name.lower()
+        examples = [
+            f"run the {name_words}",
+            f"what is the {name_words}",
+            f"execute {name_words}",
+        ]
+
+        # Create closures for the handlers
+        def _make_read(pid, pname, pdesc, psteps, ptrigger):
+            async def _read(message, http_client=None):
+                schedule_info = f"Scheduled: {ptrigger}" if ptrigger != "manual" else "Trigger: manual (on-demand)"
+                step_list = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(psteps))
+                return (
+                    f"**{pname}**\n\n"
+                    f"{pdesc}\n\n"
+                    f"{schedule_info}\n\n"
+                    f"**Steps ({len(psteps)}):**\n{step_list}\n\n"
+                    f"Would you like me to run it now?"
+                )
+            return _read
+
+        def _make_write(pid, pname):
+            async def _write(message, http_client=None):
+                try:
+                    execution = await start_process(pid, params={}, http_client=http_client)
+                    exec_id = execution.get("execution_id", "unknown")
+                    status = execution.get("status", "unknown")
+                    if status == "completed":
+                        return (
+                            f"**{pname}** completed successfully.\n\n"
+                            f"Execution ID: `{exec_id}`\n"
+                            f"Results stored in memory and emailed."
+                        )
+                    elif status == "waiting_for_gate":
+                        return (
+                            f"**{pname}** paused at a review gate.\n"
+                            f"Execution ID: `{exec_id}`"
+                        )
+                    elif status in ("error", "failed"):
+                        return f"**{pname}** failed: {execution.get('error', 'Unknown error')}"
+                    else:
+                        return f"**{pname}** started (status: {status}). Execution ID: `{exec_id}`"
+                except Exception as e:
+                    return f"Failed to run **{pname}**: {e}"
+            return _write
+
+        skill_id = f"process:{proc_id}"
+        register_skill(Skill(
+            id=skill_id,
+            name=proc_name,
+            description=f"{proc_desc} (automated process — can be run on demand)",
+            examples=examples,
+            read_handler=_make_read(proc_id, proc_name, proc_desc, step_names, trigger),
+            write_handler=_make_write(proc_id, proc_name),
+            category="process",
+        ))
+
+    logger.info("process_skills_registered", extra={"count": len(processes)})

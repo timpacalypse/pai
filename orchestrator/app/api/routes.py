@@ -2,7 +2,6 @@ import logging
 import time
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
 
 from app.models.schemas import (
     TaskRequest, TaskResponse, CompetitionRequest, RoleType, DomainType, ROLE_DOMAIN_MAP,
@@ -26,7 +25,6 @@ from app.services.article_dedup import mark_article_seen, filter_new_articles, g
 from app.services.scheduler import run_scheduled_research
 from app.memory.semantic import store_semantic
 from app.services.ollama_service import generate
-from app.services.prompt_service import build_system_prompt
 
 logger = logging.getLogger("pai.api")
 
@@ -276,67 +274,68 @@ async def send_digest_now(min_score: float = 0.0, days: int = 7):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
-    """Conversational endpoint with LLM-based intent classification, role inference, and skill routing."""
+    """Conversational endpoint with dynamic skill routing via LLM classification."""
     start = time.perf_counter()
     http_client = request.app.state.http_client
 
-    # ── Step 1: LLM-based intent + role classification (single fast call) ──
+    # ── Step 1: LLM-based classification (single fast call) ──
+    from app.services.llm_intent_service import classify_chat_intent
+    classification = await classify_chat_intent(req.message, http_client)
+
     if req.role:
-        # Explicit role provided — skip LLM classification for role, still classify intent
-        from app.services.llm_intent_service import classify_chat_intent
-        classification = await classify_chat_intent(req.message, http_client)
         roles = await resolve_roles(req.role, req.secondary_role)
     else:
-        from app.services.llm_intent_service import classify_chat_intent
-        classification = await classify_chat_intent(req.message, http_client)
         roles = await resolve_roles(classification["role"], None)
 
-    intent = classification["intent"]
-    skill_context_types = classification["skill_context"]
+    action = classification["action"]     # query | execute | conversation
+    skill_id = classification["skill"]    # registered skill id or "none"
 
-    # ── Step 2: Route based on classified intent ──
+    # ── Step 2: Skill dispatch ──
+    from app.services.skill_registry import get_skill
 
-    # Briefing intent
-    if intent == "briefing":
-        content = await _handle_briefing_chat(request, req.message)
-        return _build_chat_response(req, roles, content, "briefing", start)
-
-    # Check if user wants to run a process
-    process_match = await _match_process_request(req.message, http_client)
-    if process_match:
-        content = await _handle_process_chat(process_match, req.message, http_client)
-        return _build_chat_response(req, roles, content, "process_run", start)
-
-    # Skill mutation intents — route to actual skill services
-    if intent == "medical_record":
-        content = await _handle_skill_mutation("medical", req.message, http_client)
-        return _build_chat_response(req, roles, content, "medical_record", start)
-
-    if intent == "home_record":
-        content = await _handle_skill_mutation("home", req.message, http_client)
-        return _build_chat_response(req, roles, content, "home_record", start)
-
-    if intent == "calendar_event":
-        # Guard: detect read queries that were misclassified as calendar mutations
-        msg_lower = req.message.lower().strip()
-        read_indicators = (
-            msg_lower.startswith(("what", "when", "show", "list", "check", "any", "do i have", "is there", "are there", "tell me", "how many"))
-            or "what's on" in msg_lower
-            or "what is on" in msg_lower
-            or "upcoming" in msg_lower
-        )
-        create_indicators = any(w in msg_lower for w in ("add ", "schedule ", "create ", "set up ", "book ", "put ", "plan ", "new event", "remind me"))
-        if read_indicators and not create_indicators:
-            # Redirect to conversation path with calendar context
-            intent = "conversation"
-            if "calendar" not in skill_context_types:
-                skill_context_types.append("calendar")
-        else:
-            content = await _handle_skill_mutation("calendar", req.message, http_client)
-            return _build_chat_response(req, roles, content, "calendar_event", start)
+    if skill_id and skill_id != "none":
+        skill = get_skill(skill_id)
+        if skill:
+            try:
+                if action == "execute" and skill.write_handler:
+                    content = await skill.write_handler(req.message, http_client)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+                elif action == "query" and skill.read_handler:
+                    # Inject skill data as context for the LLM to interpret
+                    skill_data = await skill.read_handler(req.message, http_client)
+                    content = await _generate_with_context(
+                        req, roles, http_client,
+                        skill_context=[skill_data] if skill_data else [],
+                    )
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+                elif skill.read_handler:
+                    # Action ambiguous — default to reading with context
+                    skill_data = await skill.read_handler(req.message, http_client)
+                    content = await _generate_with_context(
+                        req, roles, http_client,
+                        skill_context=[skill_data] if skill_data else [],
+                    )
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+            except Exception as e:
+                logger.warning(f"Skill {skill_id} failed: {e}")
+                # Fall through to conversation
 
     # ── Step 3: Conversation — build context and generate response ──
+    content = await _generate_with_context(req, roles, http_client)
+    return _build_chat_response(req, roles, content, "conversation", start)
+
+
+async def _generate_with_context(
+    req: ChatRequest,
+    roles,
+    http_client,
+    skill_context: list[str] | None = None,
+) -> str:
+    """Generate an LLM response with RAG + optional skill context."""
     from app.services.prompt_service import build_chat_prompt
+    from app.memory.semantic import search_semantic
+    from app.services.ollama_service import select_model
+
     system_prompt = build_chat_prompt(roles)
 
     # Build conversation context from history
@@ -349,13 +348,9 @@ async def chat(req: ChatRequest, request: Request):
     else:
         user_prompt = req.message
 
-    # ── RAG: retrieve from semantic memory ──
-    from app.memory.semantic import search_semantic
+    # RAG: retrieve from semantic memory
     rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
     rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
-
-    # ── Skill context: LLM-directed (only query what the classifier says is relevant) ──
-    skill_context = await _gather_skill_context_by_type(skill_context_types)
 
     # Assemble augmented prompt
     context_parts = []
@@ -365,21 +360,16 @@ async def chat(req: ChatRequest, request: Request):
         context_parts.append("Live data:\n" + "\n".join(skill_context))
 
     if context_parts:
-        user_prompt += "\n\n[Context — use ONLY if directly relevant to the question. Ignore otherwise.]\n" + "\n\n".join(context_parts)
+        user_prompt += "\n\n[Context — use ONLY this data to answer. Do not make up information not present in the context.]\n" + "\n\n".join(context_parts)
 
-    # Select model based on message complexity
-    from app.services.ollama_service import select_model
     model = select_model(req.message)
 
-    # Generate response
-    content = await generate(
+    return await generate(
         prompt=user_prompt,
         system_prompt=system_prompt,
         model=model,
         http_client=http_client,
     )
-
-    return _build_chat_response(req, roles, content, intent, start)
 
 
 def _build_chat_response(req, roles, content: str, intent: str, start: float) -> ChatResponse:
@@ -412,38 +402,6 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float) ->
     )
 
 
-async def _handle_skill_mutation(skill: str, message: str, http_client) -> str:
-    """Route a mutation intent to the appropriate skill service and return a human-readable response."""
-    try:
-        if skill == "medical":
-            from app.services.medical_service import process_medical_input
-            result = await process_medical_input(message, http_client=http_client)
-            if result.get("error"):
-                return f"I tried to save that medical record but ran into an issue: {result['error']}"
-            actions = result.get("actions", [])
-            return " | ".join(actions) if actions else f"Recorded medical entry for {result.get('family_member', 'unknown')}."
-
-        elif skill == "home":
-            from app.services.home_knowledge_service import process_natural_input
-            result = await process_natural_input(user_text=message, http_client=http_client)
-            if result.get("error"):
-                return f"I tried to save that home record but ran into an issue: {result['error']}"
-            actions = result.get("actions", [])
-            return " | ".join(actions) if actions else "Saved to the home database."
-
-        elif skill == "calendar":
-            from app.services.calendar_service import process_calendar_input
-            result = await process_calendar_input(message, http_client=http_client)
-            if result.get("error"):
-                return f"I tried to add that to the calendar but ran into an issue: {result['error']}"
-            actions = result.get("actions", [])
-            return " | ".join(actions) if actions else "Added to calendar."
-
-    except Exception as e:
-        return f"Sorry, I couldn't process that {skill} request: {e}"
-    return "I wasn't sure how to handle that request."
-
-
 @router.get("/chat/history")
 async def chat_history(conversation_id: str, limit: int = 50):
     """Retrieve persisted chat history for a conversation."""
@@ -458,400 +416,6 @@ async def chat_conversations(limit: int = 20):
     from app.memory.episodic import list_conversations
     convos = await list_conversations(limit=limit)
     return {"conversations": convos}
-
-
-async def _handle_briefing_chat(request, user_message: str) -> str:
-    """Build daily briefing data and have the LLM format it conversationally."""
-    from app.services.briefing_service import build_daily_briefing, build_briefing_text
-
-    briefing = await build_daily_briefing(http_client=request.app.state.http_client)
-    briefing_text = build_briefing_text(briefing)
-
-    system_prompt = (
-        "You are PAI — a Personal AI assistant delivering a daily briefing.\n"
-        "Present the briefing data below in a clear, conversational format.\n"
-        "Use sections with headers. Be concise but complete.\n"
-        "Do NOT invent data — only report what's provided.\n"
-        "Respond in natural language, NOT JSON."
-    )
-    user_prompt = (
-        f"The user asked: \"{user_message}\"\n\n"
-        f"Here is today's briefing data:\n\n{briefing_text}\n\n"
-        "Present this as my daily briefing."
-    )
-
-    content = await generate(
-        prompt=user_prompt,
-        system_prompt=system_prompt,
-        http_client=request.app.state.http_client,
-    )
-    return content
-
-
-async def _gather_skill_context(message: str) -> list[str]:
-    """Query home KB and meal data when the chat message references those domains."""
-    lower = message.lower()
-    context = []
-
-    # Home maintenance keywords
-    home_keywords = [
-        "filter", "maintenance", "replace", "repair", "appliance", "hvac",
-        "plumbing", "furnace", "water heater", "air filter", "home", "house",
-        "when do i", "when should i", "is it time to", "overdue", "due",
-        "manual", "instructions", "warranty",
-    ]
-    if any(kw in lower for kw in home_keywords):
-        try:
-            from app.services.home_knowledge_service import get_alerts, get_home_tasks, get_home_documents
-            # Get upcoming/overdue tasks
-            alerts = await get_alerts()
-            if alerts["overdue"]:
-                overdue_strs = [f"OVERDUE: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
-                                for t in alerts["overdue"]]
-                context.append("Home maintenance overdue:\n" + "\n".join(overdue_strs))
-            if alerts["upcoming"]:
-                upcoming_strs = [f"Upcoming: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
-                                 for t in alerts["upcoming"]]
-                context.append("Home maintenance upcoming:\n" + "\n".join(upcoming_strs))
-
-            # Search documents if they seem to be asking about manuals/instructions
-            doc_keywords = ["manual", "instructions", "how to", "warranty", "guide"]
-            if any(kw in lower for kw in doc_keywords):
-                # Extract a search term
-                docs = await get_home_documents(search=message[:100])
-                if docs:
-                    doc_strs = [f"[{d['title']}] {d.get('preview', '')}" for d in docs[:3]]
-                    context.append("Relevant home documents:\n" + "\n".join(doc_strs))
-
-            # Always show tasks if asking about specific items
-            all_tasks = await get_home_tasks()
-            if all_tasks:
-                task_strs = [f"{t['item_name']}: {t['description']} — status: {t.get('status','ok')}, "
-                             f"next due: {t.get('next_due_at', 'N/A')}"
-                             for t in all_tasks[:5]]
-                context.append("Home maintenance tasks:\n" + "\n".join(task_strs))
-        except Exception:
-            pass
-
-    # Meal/food keywords
-    meal_keywords = [
-        "meal", "dinner", "lunch", "breakfast", "recipe", "cook", "food",
-        "eat", "menu", "what did we", "what should we", "what does",
-        "like", "dislike", "family preference",
-    ]
-    if any(kw in lower for kw in meal_keywords):
-        try:
-            from app.services.family_preference_service import build_preference_context
-            from app.services.meal_planner import get_meal_plans
-            prefs = await build_preference_context()
-            if prefs and "No family members" not in prefs:
-                context.append(prefs)
-            recent_plans = await get_meal_plans(limit=1)
-            if recent_plans:
-                plan = recent_plans[0]
-                week = plan.get("plan", {}).get("week", [])
-                if week:
-                    dinners = [f"{d.get('day','')}: {d.get('dinner','?')}" for d in week if isinstance(d, dict)]
-                    context.append(f"Latest meal plan ({plan.get('week_label','')}):\n" + "\n".join(dinners))
-        except Exception:
-            pass
-
-    # Recipe keywords
-    recipe_keywords = ["recipe", "recipes", "saved recipe", "what recipes", "how to make"]
-    if any(kw in lower for kw in recipe_keywords):
-        try:
-            from app.services.recipe_service import build_recipe_context
-            # Extract a search term from the message
-            recipe_ctx = await build_recipe_context(search=message[:80])
-            if recipe_ctx:
-                context.append(recipe_ctx)
-        except Exception:
-            pass
-
-    # Medical keywords
-    medical_keywords = [
-        "doctor", "medical", "health", "prescription", "medication", "dentist",
-        "appointment", "checkup", "vaccine", "vaccination", "surgery", "lab",
-        "blood pressure", "diagnosis", "specialist", "pediatrician", "allergy",
-        "allergies", "sick", "symptoms", "vision", "eye", "dental",
-    ]
-    if any(kw in lower for kw in medical_keywords):
-        try:
-            from app.services.medical_service import build_medical_context
-            med_ctx = await build_medical_context()
-            if med_ctx:
-                context.append(med_ctx)
-        except Exception:
-            pass
-
-    # Calendar/event keywords
-    calendar_keywords = [
-        "calendar", "schedule", "event", "appointment", "birthday", "upcoming",
-        "what's coming up", "next week", "this week", "agenda", "when is",
-        "what do we have", "plans for", "busy",
-    ]
-    if any(kw in lower for kw in calendar_keywords):
-        try:
-            from app.services.calendar_service import build_calendar_context
-            cal_ctx = await build_calendar_context(days=14)
-            if cal_ctx:
-                context.append(cal_ctx)
-        except Exception:
-            pass
-
-    return context
-
-
-async def _gather_skill_context_by_type(context_types: list[str]) -> list[str]:
-    """Query skill data sources based on LLM-classified context types."""
-    context = []
-
-    if "home" in context_types:
-        try:
-            from app.services.home_knowledge_service import get_alerts, get_home_tasks
-            alerts = await get_alerts()
-            if alerts["overdue"]:
-                overdue_strs = [f"OVERDUE: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
-                                for t in alerts["overdue"]]
-                context.append("Home maintenance overdue:\n" + "\n".join(overdue_strs))
-            if alerts["upcoming"]:
-                upcoming_strs = [f"Upcoming: {t['item_name']} — {t['description']} (due {t.get('next_due_at', 'N/A')})"
-                                 for t in alerts["upcoming"]]
-                context.append("Home maintenance upcoming:\n" + "\n".join(upcoming_strs))
-            all_tasks = await get_home_tasks()
-            if all_tasks:
-                task_strs = [f"{t['item_name']}: {t['description']} — status: {t.get('status','ok')}, "
-                             f"next due: {t.get('next_due_at', 'N/A')}"
-                             for t in all_tasks[:5]]
-                context.append("Home maintenance tasks:\n" + "\n".join(task_strs))
-        except Exception:
-            pass
-
-    if "meals" in context_types:
-        try:
-            from app.services.family_preference_service import build_preference_context
-            from app.services.meal_planner import get_meal_plans
-            prefs = await build_preference_context()
-            if prefs and "No family members" not in prefs:
-                context.append(prefs)
-            recent_plans = await get_meal_plans(limit=1)
-            if recent_plans:
-                plan = recent_plans[0]
-                week = plan.get("plan", {}).get("week", [])
-                if week:
-                    dinners = [f"{d.get('day','')}: {d.get('dinner','?')}" for d in week if isinstance(d, dict)]
-                    context.append(f"Latest meal plan ({plan.get('week_label','')}):\n" + "\n".join(dinners))
-        except Exception:
-            pass
-
-    if "recipes" in context_types:
-        try:
-            from app.services.recipe_service import build_recipe_context
-            recipe_ctx = await build_recipe_context(search="")
-            if recipe_ctx:
-                context.append(recipe_ctx)
-        except Exception:
-            pass
-
-    if "medical" in context_types:
-        try:
-            from app.services.medical_service import build_medical_context
-            med_ctx = await build_medical_context()
-            if med_ctx:
-                context.append(med_ctx)
-        except Exception:
-            pass
-
-    if "calendar" in context_types:
-        try:
-            from app.services.calendar_service import build_calendar_context
-            cal_ctx = await build_calendar_context(days=14)
-            context.append(cal_ctx)  # always has content (explicit "no events" message)
-        except Exception as e:
-            logger.warning(f"Calendar context failed: {e}")
-            context.append("Calendar: Unable to retrieve calendar data.")
-
-    return context
-
-
-async def _match_process_request(message: str, http_client=None) -> dict | None:
-    """Check if a chat message is asking about or wanting to run a process.
-
-    Returns the matched process definition dict, or None.
-    """
-    from app.services.process_engine import list_process_definitions
-    processes = await list_process_definitions()
-
-    msg_lower = message.lower()
-
-    # Direct name/keyword matching against process definitions
-    for proc in processes:
-        proc_name = proc["name"].lower()
-        proc_id = proc["process_id"].lower().replace("_", " ")
-        # Check if key phrases from the process name appear in the message
-        name_words = [w for w in proc_name.split() if len(w) > 3]  # skip short words
-        if len(name_words) >= 2:
-            matches = sum(1 for w in name_words if w in msg_lower)
-            if matches >= 2:
-                return proc
-        # Also check process_id words
-        id_words = [w for w in proc_id.split() if len(w) > 3]
-        if len(id_words) >= 2:
-            matches = sum(1 for w in id_words if w in msg_lower)
-            if matches >= 2:
-                return proc
-
-    return None
-
-
-async def _handle_process_chat(process: dict, message: str, http_client=None) -> str:
-    """Handle a chat message that references a process — describe it or run it."""
-    msg_lower = message.lower()
-
-    # Detect if user wants to RUN it vs just asking about it
-    run_indicators = any(w in msg_lower for w in (
-        "run ", "start ", "execute ", "trigger ", "launch ", "kick off",
-        "do ", "perform ", "generate ", "send ",
-    ))
-
-    proc_id = process["process_id"]
-    proc_name = process["name"]
-    steps = process.get("steps", [])
-    step_names = [s.get("name", s.get("id", "?")) for s in steps]
-    trigger = process.get("trigger_config", {}).get("type", "manual")
-
-    if run_indicators:
-        # Actually start the process
-        try:
-            from app.services.process_engine import start_process
-            execution = await start_process(proc_id, params={}, http_client=http_client)
-            exec_id = execution.get("execution_id", "unknown")
-            status = execution.get("status", "unknown")
-
-            if status == "completed":
-                return (
-                    f"**{proc_name}** has completed successfully.\n\n"
-                    f"Execution ID: `{exec_id}`\n"
-                    f"Steps executed: {len(steps)}\n\n"
-                    f"Results have been stored in memory and emailed to you."
-                )
-            elif status == "waiting_for_gate":
-                gate_step = next((s for s in steps if s.get("type") == "gate"), None)
-                gate_msg = gate_step.get("gate_message", "Waiting for approval") if gate_step else "Waiting for approval"
-                return (
-                    f"**{proc_name}** is paused at a review gate.\n\n"
-                    f"Execution ID: `{exec_id}`\n"
-                    f"Gate: {gate_msg}\n\n"
-                    f"Approve or reject via the process API when ready."
-                )
-            elif status in ("error", "failed"):
-                error = execution.get("error", "Unknown error")
-                completed_steps = [s for s in execution.get("step_log", []) if s.get("status") == "completed"]
-                return (
-                    f"**{proc_name}** encountered an error after completing {len(completed_steps)}/{len(steps)} steps.\n\n"
-                    f"Error: {error}\n"
-                    f"Execution ID: `{exec_id}`"
-                )
-            else:
-                return f"**{proc_name}** started (status: {status}). Execution ID: `{exec_id}`"
-        except Exception as e:
-            return f"Failed to start **{proc_name}**: {e}"
-    else:
-        # Describe the process
-        schedule_info = f"Scheduled: {trigger}" if trigger != "manual" else "Trigger: manual (on-demand)"
-        step_list = "\n".join(f"  {i+1}. {name}" for i, name in enumerate(step_names))
-        return (
-            f"**{proc_name}**\n\n"
-            f"{process.get('description', '')}\n\n"
-            f"{schedule_info}\n"
-            f"Roles: {', '.join(process.get('roles', []))}\n\n"
-            f"**Steps ({len(steps)}):**\n{step_list}\n\n"
-            f"Would you like me to run it now?"
-        )
-
-
-async def _detect_and_route_skill_action(
-    lower_msg: str, original_msg: str, request
-) -> tuple[str, str] | None:
-    """Detect if a chat message is trying to mutate skill data (add/update/log).
-
-    Returns (intent_type, response_text) if a skill action was executed, else None.
-    """
-    # Action verbs that signal mutation intent
-    action_verbs = [
-        "add ", "record ", "log ", "save ", "store ", "update ", "track ",
-        "create ", "set ", "note ", "put ", "enter ", "register ",
-        "add to ", "added to ", "mark ", "schedule ",
-    ]
-    has_action = any(lower_msg.startswith(v) or f" {v}" in f" {lower_msg}" for v in action_verbs)
-    if not has_action:
-        return None
-
-    # Medical signals
-    medical_signals = [
-        "medical record", "medical", "doctor", "prescription", "medication",
-        "colonoscopy", "surgery", "diagnosis", "lab result", "blood work",
-        "checkup", "dentist", "physical", "vaccine", "vaccination",
-        "health record", "specialist", "procedure", "appointment",
-        "therapy", "screening", "x-ray", "mri", "ct scan", "ultrasound",
-    ]
-    if any(s in lower_msg for s in medical_signals):
-        try:
-            from app.services.medical_service import process_medical_input
-            result = await process_medical_input(
-                original_msg, http_client=request.app.state.http_client,
-            )
-            if result.get("error"):
-                return ("medical_record", f"I tried to save that medical record but ran into an issue: {result['error']}")
-            actions = result.get("actions", [])
-            content = " | ".join(actions) if actions else f"Recorded medical entry for {result.get('family_member', 'unknown')}."
-            return ("medical_record", content)
-        except Exception as e:
-            return ("medical_record", f"Sorry, I couldn't save that medical record: {e}")
-
-    # Home signals
-    home_signals = [
-        "home database", "home", "house", "hvac", "appliance", "maintenance",
-        "plumbing", "furnace", "water heater", "air filter", "roof",
-        "garage", "washer", "dryer", "dishwasher", "refrigerator", "oven",
-        "lake anna", "townhouse", "condo",
-        "serviced", "repaired", "replaced", "installed", "fixed",
-    ]
-    if any(s in lower_msg for s in home_signals):
-        try:
-            from app.services.home_knowledge_service import process_natural_input
-            result = await process_natural_input(
-                user_text=original_msg,
-                http_client=request.app.state.http_client,
-            )
-            if result.get("error"):
-                return ("home_record", f"I tried to save that home record but ran into an issue: {result['error']}")
-            actions = result.get("actions", [])
-            content = " | ".join(actions) if actions else "Saved to the home database."
-            return ("home_record", content)
-        except Exception as e:
-            return ("home_record", f"Sorry, I couldn't save that to the home database: {e}")
-
-    # Calendar signals
-    calendar_signals = [
-        "calendar", "event", "appointment", "birthday", "anniversary",
-        "reminder", "meeting",
-    ]
-    if any(s in lower_msg for s in calendar_signals):
-        try:
-            from app.services.calendar_service import process_calendar_input
-            result = await process_calendar_input(
-                original_msg, http_client=request.app.state.http_client,
-            )
-            if result.get("error"):
-                return ("calendar_event", f"I tried to add that to the calendar but ran into an issue: {result['error']}")
-            actions = result.get("actions", [])
-            content = " | ".join(actions) if actions else "Added to calendar."
-            return ("calendar_event", content)
-        except Exception as e:
-            return ("calendar_event", f"Sorry, I couldn't add that to the calendar: {e}")
-
-    return None
 
 
 # ── Meal Planning Endpoints ────────────────────────────────────

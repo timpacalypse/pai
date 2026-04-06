@@ -41,6 +41,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Process seed failed (table may not exist yet): {e}")
 
+    # Register skill registry (built-in + process definitions)
+    from app.services.skill_registry import register_all_skills
+    register_all_skills()
+    try:
+        from app.services.skill_registry import register_process_skills
+        await register_process_skills()
+    except Exception as e:
+        logger.warning(f"Process skill registration failed: {e}")
+
     # Start background schedulers
     scheduler_task = asyncio.create_task(scheduler_loop())
     app.state.scheduler_task = scheduler_task
