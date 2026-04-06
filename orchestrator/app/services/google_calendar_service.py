@@ -36,7 +36,7 @@ def _get_paths():
 
 
 def _get_credentials():
-    """Load or refresh OAuth credentials. Returns None if not configured."""
+    """Load or refresh OAuth credentials. Returns None if not configured or not yet authorized."""
     cred_path, tok_path = _get_paths()
 
     if not os.path.exists(cred_path):
@@ -46,30 +46,29 @@ def _get_credentials():
         return None
 
     try:
-        from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
 
-        creds = None
-        if os.path.exists(tok_path):
-            creds = Credentials.from_authorized_user_file(tok_path, SCOPES)
+        # Only load existing token — never start interactive auth here
+        if not os.path.exists(tok_path):
+            logger.info("google_calendar_needs_auth", extra={
+                "reason": "Token file not found — run auth flow via /skills/calendar/google/auth"
+            })
+            return None
 
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    cred_path, SCOPES
-                )
-                # Use console-based auth (no browser needed on headless server)
-                creds = flow.run_console()
+        creds = Credentials.from_authorized_user_file(tok_path, SCOPES)
 
-            # Save the token for next time
-            os.makedirs(os.path.dirname(tok_path), exist_ok=True)
+        if creds and creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+            # Save refreshed token
             with open(tok_path, "w") as f:
                 f.write(creds.to_json())
 
-        return creds
+        if creds and creds.valid:
+            return creds
+
+        logger.warning("google_calendar_token_invalid")
+        return None
     except Exception as e:
         logger.error("google_calendar_auth_failed", extra={"error": str(e)})
         return None
@@ -82,17 +81,81 @@ def _build_service(creds):
 
 
 async def is_configured() -> bool:
-    """Check if Google Calendar credentials exist and are valid."""
+    """Check if Google Calendar credentials file exists."""
     import asyncio
     return await asyncio.to_thread(_check_configured)
 
 
-def _check_configured() -> bool:
-    cred_path, _ = _get_paths()
-    if not os.path.exists(cred_path):
-        return False
+async def is_authorized() -> bool:
+    """Check if we have a valid token (auth flow completed)."""
     creds = _get_credentials()
     return creds is not None and creds.valid
+
+
+def _check_configured() -> bool:
+    """Check if credentials file exists (not whether auth is complete)."""
+    cred_path, _ = _get_paths()
+    return os.path.exists(cred_path)
+
+
+def get_auth_url() -> str | None:
+    """Generate the OAuth authorization URL the user must visit.
+
+    Returns the URL string, or None if credentials file is missing.
+    """
+    cred_path, _ = _get_paths()
+    if not os.path.exists(cred_path):
+        return None
+
+    from google_auth_oauthlib.flow import Flow
+
+    flow = Flow.from_client_secrets_file(
+        cred_path,
+        scopes=SCOPES,
+        redirect_uri="urn:ietf:wg:oauth:2.0:oob",  # manual copy-paste flow
+    )
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    return auth_url
+
+
+async def exchange_auth_code(code: str) -> dict:
+    """Exchange an authorization code for tokens. Saves token to disk.
+
+    Returns {"success": True} or {"success": False, "error": "..."}.
+    """
+    import asyncio
+    return await asyncio.to_thread(_exchange_sync, code)
+
+
+def _exchange_sync(code: str) -> dict:
+    cred_path, tok_path = _get_paths()
+    if not os.path.exists(cred_path):
+        return {"success": False, "error": "No credentials file found"}
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+
+        flow = Flow.from_client_secrets_file(
+            cred_path,
+            scopes=SCOPES,
+            redirect_uri="urn:ietf:wg:oauth:2.0:oob",
+        )
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+
+        os.makedirs(os.path.dirname(tok_path), exist_ok=True)
+        with open(tok_path, "w") as f:
+            f.write(creds.to_json())
+
+        logger.info("google_calendar_authorized")
+        return {"success": True}
+    except Exception as e:
+        logger.error("google_calendar_auth_exchange_failed", extra={"error": str(e)})
+        return {"success": False, "error": str(e)}
 
 
 async def get_google_events(days: int = 14) -> list[dict]:

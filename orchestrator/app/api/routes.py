@@ -1325,14 +1325,42 @@ async def remove_calendar_event(event_id: int):
 async def google_calendar_status():
     """Check if Google Calendar integration is configured and working."""
     try:
-        from app.services.google_calendar_service import is_configured, get_google_events
+        from app.services.google_calendar_service import is_configured, is_authorized
         configured = await is_configured()
         if not configured:
             return {"status": "not_configured", "message": "Place google_credentials.json in /credentials/ directory and restart"}
-        events = await get_google_events(days=1)
-        return {"status": "connected", "events_today": len(events)}
+        authorized = await is_authorized()
+        if not authorized:
+            return {"status": "needs_auth", "message": "Visit /skills/calendar/google/auth to authorize"}
+        return {"status": "connected"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/skills/calendar/google/auth")
+async def google_calendar_auth():
+    """Get the Google OAuth authorization URL. User visits this URL, grants access, and posts the code back."""
+    from app.services.google_calendar_service import get_auth_url, is_authorized
+    if await is_authorized():
+        return {"status": "already_authorized"}
+    url = get_auth_url()
+    if not url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No credentials file found")
+    return {"auth_url": url, "instructions": "Visit the URL, grant access, copy the authorization code, then POST it to /skills/calendar/google/callback"}
+
+
+@router.post("/skills/calendar/google/callback")
+async def google_calendar_callback(request: Request):
+    """Exchange the OAuth authorization code for tokens."""
+    from app.services.google_calendar_service import exchange_auth_code
+    body = await request.json()
+    code = body.get("code", "").strip()
+    if not code:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Missing 'code' field")
+    result = await exchange_auth_code(code)
+    return result
 
 
 # ── Learning Loop ───────────────────────────────────────────────
