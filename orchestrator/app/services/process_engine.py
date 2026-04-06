@@ -569,6 +569,7 @@ async def _skill_email_send(inputs: dict) -> dict:
     import asyncio
     import smtplib
     from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
     from app.core.config import settings
     to_addr = inputs.get("to", [])
     if isinstance(to_addr, list):
@@ -578,11 +579,21 @@ async def _skill_email_send(inputs: dict) -> dict:
     if not (to_addr and subject and body and settings.gmail_address and settings.gmail_app_password):
         return {"send_confirmation": False, "reason": "Missing to/subject/body or gmail config"}
 
+    body_str = str(body)
+    # If the body is already HTML (from template_render), use it directly;
+    # otherwise wrap raw text in the standard HTML email template
+    if "<html" in body_str.lower():
+        html_body = body_str
+    else:
+        html_body = _wrap_text_in_html_email(body_str, subject)
+
     def _send_sync():
-        msg = MIMEText(str(body), "plain")
+        msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = f"PAI Process <{settings.gmail_address}>"
         msg["To"] = to_addr
+        msg.attach(MIMEText(body_str, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(settings.gmail_address, settings.gmail_app_password)
             server.send_message(msg)
@@ -593,6 +604,126 @@ async def _skill_email_send(inputs: dict) -> dict:
     except Exception as e:
         logger.error("skill_email_send_failed", extra={"error": str(e)})
         return {"send_confirmation": False, "reason": str(e)}
+
+
+def _wrap_text_in_html_email(text: str, title: str = "PAI Report") -> str:
+    """Wrap raw text/markdown in a styled HTML email template."""
+    import re
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+    # Convert markdown-like formatting to HTML
+    lines = text.split("\n")
+    html_lines = []
+    in_list = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append("<br>")
+            continue
+        # Headers
+        if stripped.startswith("### "):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append(
+                f'<h4 style="color:#e4e6f0;font-size:14px;margin:16px 0 6px;">{_esc(stripped[4:])}</h4>'
+            )
+        elif stripped.startswith("## "):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append(
+                f'<h3 style="color:#4f8ef7;font-size:15px;margin:20px 0 8px;'
+                f'border-bottom:1px solid #2a2d42;padding-bottom:6px;">{_esc(stripped[3:])}</h3>'
+            )
+        elif stripped.startswith("# "):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append(
+                f'<h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 10px;'
+                f'border-bottom:1px solid #2a2d42;padding-bottom:8px;">{_esc(stripped[2:])}</h2>'
+            )
+        # Bullet points
+        elif stripped.startswith(("- ", "* ", "• ")):
+            if not in_list:
+                html_lines.append('<ul style="margin:4px 0;padding-left:20px;">')
+                in_list = True
+            content = stripped[2:]
+            # Bold key: value pattern
+            bold_match = re.match(r'\*\*(.+?)\*\*:?\s*(.*)', content)
+            if bold_match:
+                html_lines.append(
+                    f'<li style="color:#e4e6f0;margin:3px 0;font-size:13px;">'
+                    f'<strong style="color:#4f8ef7;">{_esc(bold_match.group(1))}</strong>'
+                    f'{": " + _esc(bold_match.group(2)) if bold_match.group(2) else ""}</li>'
+                )
+            else:
+                html_lines.append(
+                    f'<li style="color:#e4e6f0;margin:3px 0;font-size:13px;">{_esc(content)}</li>'
+                )
+        # Numbered items
+        elif re.match(r'^\d+[\.\)]\s', stripped):
+            if not in_list:
+                html_lines.append('<ul style="margin:4px 0;padding-left:20px;list-style-type:decimal;">')
+                in_list = True
+            content = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+            html_lines.append(
+                f'<li style="color:#e4e6f0;margin:3px 0;font-size:13px;">{_esc(content)}</li>'
+            )
+        # Bold lines (section labels)
+        elif stripped.startswith("**") and stripped.endswith("**"):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append(
+                f'<p style="color:#4f8ef7;font-weight:600;margin:14px 0 4px;font-size:14px;">'
+                f'{_esc(stripped.strip("*"))}</p>'
+            )
+        else:
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            # Inline bold
+            formatted = re.sub(
+                r'\*\*(.+?)\*\*',
+                r'<strong style="color:#4f8ef7;">\1</strong>',
+                _esc(stripped),
+            )
+            html_lines.append(
+                f'<p style="color:#e4e6f0;margin:4px 0;font-size:13px;line-height:1.5;">{formatted}</p>'
+            )
+    if in_list:
+        html_lines.append("</ul>")
+
+    content_html = "\n".join(html_lines)
+    return f"""<html>
+<body style="background:#0f1117;font-family:'Segoe UI',system-ui,sans-serif;margin:0;padding:20px;">
+    <div style="max-width:700px;margin:0 auto;background:#161822;
+                border-radius:12px;overflow:hidden;border:1px solid #2a2d42;">
+        <div style="background:#1a1d2e;padding:24px 30px;border-bottom:1px solid #2a2d42;">
+            <h1 style="color:#4f8ef7;margin:0;font-size:22px;">{_esc(title)}</h1>
+            <p style="color:#8b8fa8;margin:6px 0 0;font-size:13px;">{now}</p>
+        </div>
+        <div style="padding:20px 30px;">
+            {content_html}
+        </div>
+        <div style="padding:16px 30px;background:#1a1d2e;border-top:1px solid #2a2d42;">
+            <p style="color:#5c6078;font-size:11px;margin:0;text-align:center;">
+                Sent by PAI Orchestrator
+            </p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def _esc(text: str) -> str:
+    """Escape HTML special characters."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 async def _skill_email_read(inputs: dict) -> dict:
@@ -683,37 +814,153 @@ async def _skill_rss_fetch(inputs: dict) -> dict:
 
 
 async def _skill_template_render(inputs: dict) -> dict:
-    """Render a plain-text email from structured context sections."""
+    """Render a styled HTML email from structured context sections."""
+    from datetime import datetime, timezone
     template_name = inputs.get("template_name", "default")
-    sections = []
+    now = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
 
-    weather = inputs.get("weather", "")
-    if weather:
-        sections.append(f"WEATHER\n{'='*40}\n{weather}")
+    section_configs = [
+        ("weather", "🌤 Weather", "weather"),
+        ("calendar", "📅 Calendar", "calendar"),
+        ("articles", "📰 News & Articles", "articles"),
+        ("recommendations", "💡 Recommendations", "recommendations"),
+    ]
 
-    calendar = inputs.get("calendar", "")
-    if calendar:
-        cal_text = calendar if isinstance(calendar, str) else str(calendar)
-        sections.append(f"CALENDAR\n{'='*40}\n{cal_text}")
-
-    articles = inputs.get("articles", "")
-    if articles:
-        art_text = articles if isinstance(articles, str) else str(articles)
-        sections.append(f"NEWS & ARTICLES\n{'='*40}\n{art_text}")
-
-    recommendations = inputs.get("recommendations", "")
-    if recommendations:
-        rec_text = recommendations if isinstance(recommendations, str) else str(recommendations)
-        sections.append(f"RECOMMENDATIONS\n{'='*40}\n{rec_text}")
+    sections_html = []
+    for key, heading, _ in section_configs:
+        val = inputs.get(key, "")
+        if not val:
+            continue
+        content = _render_section_content(val)
+        sections_html.append(
+            f'<h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;'
+            f'border-bottom:1px solid #2a2d42;padding-bottom:8px;">{heading}</h2>'
+            f'{content}'
+        )
 
     # Catch-all for any extra context keys
     skip_keys = {"template_name", "weather", "calendar", "articles", "recommendations"}
     for k, v in inputs.items():
         if k not in skip_keys and v:
-            sections.append(f"{k.upper().replace('_', ' ')}\n{'='*40}\n{v}")
+            heading = k.upper().replace("_", " ")
+            content = _render_section_content(v)
+            sections_html.append(
+                f'<h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;'
+                f'border-bottom:1px solid #2a2d42;padding-bottom:8px;">{heading}</h2>'
+                f'{content}'
+            )
 
-    rendered = f"\n\n".join(sections) if sections else "(No content available)"
+    title_map = {
+        "daily_brief_email": "☀ PAI Daily Briefing",
+    }
+    title = title_map.get(template_name, "PAI Report")
+
+    body_html = "\n".join(sections_html) if sections_html else (
+        '<p style="color:#8b8fa8;">No content available.</p>'
+    )
+
+    rendered = f"""<html>
+<body style="background:#0f1117;font-family:'Segoe UI',system-ui,sans-serif;margin:0;padding:20px;">
+    <div style="max-width:700px;margin:0 auto;background:#161822;
+                border-radius:12px;overflow:hidden;border:1px solid #2a2d42;">
+        <div style="background:#1a1d2e;padding:24px 30px;border-bottom:1px solid #2a2d42;">
+            <h1 style="color:#4f8ef7;margin:0;font-size:22px;">{title}</h1>
+            <p style="color:#8b8fa8;margin:6px 0 0;font-size:13px;">{now}</p>
+        </div>
+        <div style="padding:20px 30px;">
+            {body_html}
+        </div>
+        <div style="padding:16px 30px;background:#1a1d2e;border-top:1px solid #2a2d42;">
+            <p style="color:#5c6078;font-size:11px;margin:0;text-align:center;">
+                Sent by PAI Orchestrator
+            </p>
+        </div>
+    </div>
+</body>
+</html>"""
     return {"rendered_email": rendered}
+
+
+def _render_section_content(val) -> str:
+    """Convert a section value (string, dict, or list) to HTML."""
+    if isinstance(val, str):
+        # Stringified data — render as styled paragraphs
+        import re
+        lines = val.split("\n")
+        parts = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("- ", "* ", "• ")):
+                parts.append(
+                    f'<div style="color:#e4e6f0;font-size:13px;padding:2px 0 2px 16px;">'
+                    f'• {_esc(stripped[2:])}</div>'
+                )
+            elif re.match(r'^\d+[\.\)]\s', stripped):
+                parts.append(
+                    f'<div style="color:#e4e6f0;font-size:13px;padding:2px 0 2px 16px;">'
+                    f'{_esc(stripped)}</div>'
+                )
+            else:
+                formatted = re.sub(
+                    r'\*\*(.+?)\*\*',
+                    r'<strong style="color:#4f8ef7;">\1</strong>',
+                    _esc(stripped),
+                )
+                parts.append(
+                    f'<p style="color:#e4e6f0;font-size:13px;margin:4px 0;line-height:1.5;">'
+                    f'{formatted}</p>'
+                )
+        return "\n".join(parts) if parts else '<p style="color:#8b8fa8;">—</p>'
+
+    if isinstance(val, list):
+        if not val:
+            return '<p style="color:#8b8fa8;">None</p>'
+        rows = ""
+        for i, item in enumerate(val, 1):
+            if isinstance(item, dict):
+                title = item.get("title", item.get("name", str(item)))
+                url = item.get("url", "")
+                summary = item.get("summary", "")[:120]
+                score_val = item.get("score", "")
+                score_html = (
+                    f' <span style="background:#4f8ef7;color:#fff;padding:1px 6px;'
+                    f'border-radius:3px;font-size:11px;">{score_val:.2f}</span>'
+                    if isinstance(score_val, (int, float)) else ""
+                )
+                link = (
+                    f'<a href="{_esc(url)}" style="color:#4f8ef7;text-decoration:none;'
+                    f'font-weight:600;">{_esc(str(title))}</a>'
+                    if url else f'<span style="color:#4f8ef7;font-weight:600;">{_esc(str(title))}</span>'
+                )
+                rows += (
+                    f'<tr style="border-bottom:1px solid #2a2d42;">'
+                    f'<td style="padding:8px 12px;color:#8b8fa8;width:30px;vertical-align:top;">{i}.</td>'
+                    f'<td style="padding:8px 12px;">{link}{score_html}'
+                    f'{"<br><span style=color:#8b8fa8;font-size:12px;>" + _esc(summary) + "</span>" if summary else ""}'
+                    f'</td></tr>'
+                )
+            else:
+                rows += (
+                    f'<tr style="border-bottom:1px solid #2a2d42;">'
+                    f'<td style="padding:6px 12px;color:#8b8fa8;width:30px;">{i}.</td>'
+                    f'<td style="padding:6px 12px;color:#e4e6f0;">{_esc(str(item))}</td></tr>'
+                )
+        return f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
+
+    if isinstance(val, dict):
+        rows = ""
+        for k, v in val.items():
+            rows += (
+                f'<tr style="border-bottom:1px solid #2a2d42;">'
+                f'<td style="padding:6px 12px;color:#4f8ef7;font-weight:600;width:140px;'
+                f'vertical-align:top;font-size:13px;">{_esc(str(k))}</td>'
+                f'<td style="padding:6px 12px;color:#e4e6f0;font-size:13px;">{_esc(str(v))}</td></tr>'
+            )
+        return f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
+
+    return f'<p style="color:#e4e6f0;font-size:13px;">{_esc(str(val))}</p>'
 
 
 _SKILL_REGISTRY: dict[str, callable] = {
