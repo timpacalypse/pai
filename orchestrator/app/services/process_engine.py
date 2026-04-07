@@ -1336,7 +1336,7 @@ DAILY_BRIEF_DEFINITION = {
     "name": "Daily Intelligence Brief",
     "description": "Gathers weather, calendar, news, and email, then assembles and sends a morning brief",
     "roles": ["cybersecurity_executive", "ai_governance_practitioner"],
-    "trigger_config": {"type": "scheduled", "cron": "30 5 * * *"},
+    "trigger_config": {"type": "scheduled", "cron": "30 9 * * *"},  # 5:30 AM ET (UTC-4 EDT)
     "steps": [
         {"id": "fetch_weather", "type": "skill", "name": "Get weather",
          "skill_id": "weather_lookup",
