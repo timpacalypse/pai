@@ -467,3 +467,30 @@ CREATE TABLE IF NOT EXISTS process_executions (
 
 CREATE INDEX IF NOT EXISTS idx_procexec_process ON process_executions (process_id);
 CREATE INDEX IF NOT EXISTS idx_procexec_status  ON process_executions (status);
+
+-- ── Workout Tracking ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS workout_programs (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    activity VARCHAR(100) NOT NULL,
+    days_of_week INTEGER[] NOT NULL DEFAULT '{}',
+    duration_minutes INTEGER DEFAULT 30,
+    notes TEXT DEFAULT '',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workout_programs_active ON workout_programs (is_active);
+
+CREATE TABLE IF NOT EXISTS workout_logs (
+    id SERIAL PRIMARY KEY,
+    workout_program_id INTEGER REFERENCES workout_programs(id) ON DELETE SET NULL,
+    activity VARCHAR(100) NOT NULL,
+    duration_minutes INTEGER DEFAULT 0,
+    log_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    notes TEXT DEFAULT '',
+    metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_workout_logs_date ON workout_logs (log_date DESC);

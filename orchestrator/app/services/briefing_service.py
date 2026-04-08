@@ -26,12 +26,14 @@ async def build_daily_briefing(http_client: httpx.AsyncClient | None = None) -> 
     articles = await _get_top_articles(limit=8)
     agenda = await _get_today_agenda()
     email_recs = await _get_email_recommendations(http_client)
+    workout = await _get_todays_workout()
 
     return {
         "weather": weather,
         "articles": articles,
         "agenda": agenda,
         "email_recommendations": email_recs,
+        "workout": workout,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -183,6 +185,16 @@ def _read_gmail_inbox(max_emails: int = 15) -> list[dict]:
     return emails
 
 
+async def _get_todays_workout() -> dict:
+    """Get today's scheduled workout and completed activities."""
+    try:
+        from app.services.workout_service import get_todays_workout
+        return await get_todays_workout()
+    except Exception as e:
+        logger.warning("workout_fetch_failed", extra={"error": str(e)})
+        return {"day": "", "scheduled": [], "completed": []}
+
+
 async def _get_email_recommendations(http_client: httpx.AsyncClient) -> dict:
     """Read Gmail inbox and use LLM to suggest scheduling actions."""
     inbox = _read_gmail_inbox(max_emails=15)
@@ -239,6 +251,7 @@ def build_briefing_html(briefing: dict) -> str:
     articles = briefing.get("articles", [])
     agenda = briefing.get("agenda", {})
     email_recs = briefing.get("email_recommendations", {})
+    workout = briefing.get("workout", {})
 
     # Weather section
     if weather.get("error"):
@@ -279,6 +292,34 @@ def build_briefing_html(briefing: dict) -> str:
             </tr></thead>
             <tbody>{forecast_rows}</tbody>
         </table>"""
+
+    # Workout section
+    scheduled = workout.get("scheduled", [])
+    completed = workout.get("completed", [])
+    if scheduled or completed:
+        workout_items = ""
+        for s in scheduled:
+            # Check if already completed
+            done = any(c.get("activity", "").lower() == s.get("activity", "").lower() for c in completed)
+            icon = "✅" if done else "🏋️"
+            color = "#4caf50" if done else "#e4e6f0"
+            notes_html = f' <span style="color:#8b8fa8;font-size:12px;">({s["notes"]})</span>' if s.get("notes") else ""
+            workout_items += (
+                f'<div style="padding:6px 0;color:{color};font-size:14px;">'
+                f'{icon} {s["activity"]} — {s["duration_minutes"]} min{notes_html}'
+                f'</div>'
+            )
+        # Show any logged activities not in the schedule
+        sched_names = {s.get("activity", "").lower() for s in scheduled}
+        for c in completed:
+            if c.get("activity", "").lower() not in sched_names:
+                workout_items += (
+                    f'<div style="padding:6px 0;color:#4caf50;font-size:14px;">'
+                    f'✅ {c["activity"]} — {c["duration_minutes"]} min</div>'
+                )
+        workout_html = workout_items
+    else:
+        workout_html = '<p style="color:#8b8fa8;">Rest day — no workouts scheduled.</p>'
 
     # Articles section
     if articles:
@@ -362,7 +403,13 @@ def build_briefing_html(briefing: dict) -> str:
 
                 <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
                            border-bottom:1px solid #2a2d42;padding-bottom:8px;">
-                    📰 Top Articles
+                    � Today's Workout
+                </h2>
+                {workout_html}
+
+                <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
+                           border-bottom:1px solid #2a2d42;padding-bottom:8px;">
+                    �📰 Top Articles
                 </h2>
                 {articles_html}
 
@@ -407,6 +454,25 @@ def build_briefing_text(briefing: dict) -> str:
             lines.append(f"  {day['date']}: {day.get('low','?')}–{day.get('high','?')}°F, "
                          f"{day.get('condition','')}, {day.get('precip_chance',0)}% rain")
 
+    lines.append("")
+
+    # Workout
+    workout = briefing.get("workout", {})
+    scheduled = workout.get("scheduled", [])
+    completed = workout.get("completed", [])
+    if scheduled:
+        lines.append("TODAY'S WORKOUT:")
+        for s in scheduled:
+            done = any(c.get("activity", "").lower() == s.get("activity", "").lower() for c in completed)
+            mark = "[DONE]" if done else ""
+            lines.append(f"  {'✓' if done else '•'} {s['activity']} — {s['duration_minutes']} min {mark}")
+    else:
+        lines.append("TODAY'S WORKOUT: Rest day")
+    if completed:
+        sched_names = {s.get("activity", "").lower() for s in scheduled}
+        extras = [c for c in completed if c.get("activity", "").lower() not in sched_names]
+        for c in extras:
+            lines.append(f"  ✓ {c['activity']} — {c['duration_minutes']} min")
     lines.append("")
 
     # Articles

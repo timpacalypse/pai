@@ -1,7 +1,7 @@
 import logging
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.models.schemas import (
     TaskRequest, TaskResponse, CompetitionRequest, RoleType, DomainType, ROLE_DOMAIN_MAP,
@@ -1237,3 +1237,64 @@ async def cancel_process_execution(execution_id: str):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ── Workout Tracking ──────────────────────────────────────────────
+
+
+@router.post("/skills/workout/tell")
+async def workout_tell(request: Request):
+    """Tell PAI about a workout program or log an activity in natural language."""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    from app.services.workout_service import process_workout_input
+    return await process_workout_input(text, http_client=request.app.state.http_client)
+
+
+@router.post("/skills/workout/log")
+async def workout_log(request: Request):
+    """Log a completed workout activity directly."""
+    body = await request.json()
+    from app.services.workout_service import log_activity
+    record = await log_activity(
+        activity=body.get("activity", ""),
+        duration_minutes=int(body.get("duration_minutes", 0)),
+        notes=body.get("notes", ""),
+        metrics=body.get("metrics", {}),
+    )
+    return record
+
+
+@router.get("/skills/workout/today")
+async def workout_today():
+    """Get today's scheduled workout and completed activities."""
+    from app.services.workout_service import get_todays_workout
+    return await get_todays_workout()
+
+
+@router.get("/skills/workout/programs")
+async def workout_programs(active_only: bool = True):
+    """List workout programs."""
+    from app.services.workout_service import get_programs
+    programs = await get_programs(active_only=active_only)
+    return {"programs": programs}
+
+
+@router.delete("/skills/workout/programs/{program_id}")
+async def workout_deactivate(program_id: int):
+    """Deactivate a workout program."""
+    from app.services.workout_service import deactivate_program
+    ok = await deactivate_program(program_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Program not found")
+    return {"deactivated": True}
+
+
+@router.get("/skills/workout/logs")
+async def workout_logs(limit: int = 30, days_back: int | None = None):
+    """Get recent workout logs."""
+    from app.services.workout_service import get_logs
+    logs = await get_logs(limit=limit, days_back=days_back)
+    return {"logs": logs}

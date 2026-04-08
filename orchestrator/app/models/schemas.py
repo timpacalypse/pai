@@ -332,3 +332,17 @@ class GateResponse(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject|modify)$")
     message: str = ""
     modifications: dict = {}
+
+
+# ── Workout Schemas ─────────────────────────────────────────
+
+
+class WorkoutTellRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+
+
+class WorkoutLogRequest(BaseModel):
+    activity: str = Field(..., min_length=1, max_length=100)
+    duration_minutes: int = Field(default=0, ge=0)
+    notes: str = ""
+    metrics: dict = {}
