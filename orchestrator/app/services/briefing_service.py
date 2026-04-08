@@ -303,11 +303,45 @@ def build_briefing_html(briefing: dict) -> str:
             done = any(c.get("activity", "").lower() == s.get("activity", "").lower() for c in completed)
             icon = "✅" if done else "🏋️"
             color = "#4caf50" if done else "#e4e6f0"
-            notes_html = f' <span style="color:#8b8fa8;font-size:12px;">({s["notes"]})</span>' if s.get("notes") else ""
+            # Build exercise detail HTML from notes
+            notes_detail = ""
+            notes_text = s.get("notes", "")
+            if notes_text and "\n" in notes_text:
+                detail_lines = []
+                for line in notes_text.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("- "):
+                        detail_lines.append(
+                            f'<div style="color:#b0b3c8;font-size:12px;padding:1px 0 1px 16px;">'
+                            f'• {line[2:]}</div>'
+                        )
+                    elif line.endswith(":") or line.isupper():
+                        detail_lines.append(
+                            f'<div style="color:#4f8ef7;font-size:11px;font-weight:600;'
+                            f'margin-top:4px;text-transform:uppercase;">{line}</div>'
+                        )
+                    else:
+                        detail_lines.append(
+                            f'<div style="color:#b0b3c8;font-size:12px;padding:1px 0 1px 16px;">'
+                            f'{line}</div>'
+                        )
+                notes_detail = (
+                    f'<div style="margin:4px 0 8px 24px;border-left:2px solid #2a2d42;padding-left:10px;">'
+                    + "\n".join(detail_lines)
+                    + '</div>'
+                )
+            elif notes_text:
+                notes_detail = (
+                    f'<div style="color:#8b8fa8;font-size:12px;margin:2px 0 6px 24px;">'
+                    f'{notes_text}</div>'
+                )
             workout_items += (
-                f'<div style="padding:6px 0;color:{color};font-size:14px;">'
-                f'{icon} {s["activity"]} — {s["duration_minutes"]} min{notes_html}'
+                f'<div style="padding:6px 0;color:{color};font-size:14px;font-weight:600;">'
+                f'{icon} {s["activity"]} — {s["duration_minutes"]} min'
                 f'</div>'
+                f'{notes_detail}'
             )
         # Show any logged activities not in the schedule
         sched_names = {s.get("activity", "").lower() for s in scheduled}
