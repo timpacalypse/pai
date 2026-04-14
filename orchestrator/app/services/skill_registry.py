@@ -193,7 +193,7 @@ def register_all_skills():
             return "No recipes found matching that query."
         lines = [f"Found {len(recipes)} recipe(s):"]
         for r in recipes:
-            rating = f" (rating: {r['avg_rating']:.1f})" if r.get("avg_rating") else ""
+            rating = f" (rating: {r['family_rating']}/5)" if r.get("family_rating") else ""
             lines.append(f"  - {r['title']} [{r.get('cuisine','')}]{rating}")
         return "\n".join(lines)
 

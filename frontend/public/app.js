@@ -70,9 +70,6 @@ async function init() {
 
             // Update placeholder
             const placeholders = {
-                medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
-                recipes: 'Save a recipe (e.g. paste a recipe title + ingredients) or search...',
-                calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
                 chat: 'Type a message...',
                 task: 'Describe a task...',
                 research: 'Enter a research topic...',
@@ -80,7 +77,7 @@ async function init() {
                 meals: 'Add family member or preference (e.g. "Add Tim, adult") or extra meal plan instructions...',
                 home: 'Tell PAI about your home (e.g. "I replaced the air filter today, replace every 3 months")...',
                 medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
-                recipes: 'Save a recipe (e.g. paste a recipe title + ingredients) or search...',
+                recipes: 'Paste a full recipe (with Ingredients + Instructions headings) or type "search chicken"...',
                 calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
                 skills: 'Skills mode — click a skill or use "Refresh Skills" to see the inventory',
             };
@@ -95,6 +92,16 @@ async function init() {
 
     // Recipes mode buttons
     document.getElementById('recipes-list-btn').addEventListener('click', loadRecipes);
+    document.getElementById('recipe-search-btn').addEventListener('click', () => {
+        const q = document.getElementById('recipe-search').value.trim();
+        if (q) searchRecipes(q);
+    });
+    document.getElementById('recipe-search').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            const q = e.target.value.trim();
+            if (q) searchRecipes(q);
+        }
+    });
 
     // Calendar mode buttons
     document.getElementById('calendar-agenda-btn').addEventListener('click', loadAgenda);
@@ -978,12 +985,7 @@ async function handleRecipeInput(text) {
     const lower = text.toLowerCase();
     if (lower.startsWith('search ') || lower.startsWith('find ')) {
         const query = text.replace(/^(search|find)\s+/i, '');
-        const resp = await fetch(`${API}/skills/recipes?search=${encodeURIComponent(query)}`);
-        const data = await resp.json();
-        renderListCards(data.recipes || [], 'recipes', r => {
-            const rating = r.family_rating ? ` ★${r.family_rating}` : '';
-            return `${r.title}${rating}${r.cuisine ? ' [' + r.cuisine + ']' : ''}`;
-        });
+        await searchRecipes(query);
         return null;
     }
     // Paste recipe — uses deterministic parser, no LLM, no token limit
@@ -1008,20 +1010,124 @@ async function handleRecipeInput(text) {
     return null;
 }
 
-async function loadRecipes() {
+async function searchRecipes(query) {
     const loadingEl = addLoading();
     try {
-        const resp = await fetch(`${API}/skills/recipes?limit=20`);
+        const resp = await fetch(`${API}/skills/recipes?search=${encodeURIComponent(query)}&limit=30`);
         const data = await resp.json();
         loadingEl.remove();
-        renderListCards(data.recipes || [], 'recipes', r => {
-            const rating = r.family_rating ? ` ★${r.family_rating}` : '';
-            return `${r.title}${rating}${r.cuisine ? ' [' + r.cuisine + ']' : ''}`;
-        });
+        renderRecipeCards(data.recipes || []);
     } catch (e) {
         loadingEl.remove();
         addMessage(`Error: ${e.message}`, 'ai', 'error');
     }
+}
+
+async function loadRecipes() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/recipes?limit=30`);
+        const data = await resp.json();
+        loadingEl.remove();
+        renderRecipeCards(data.recipes || []);
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+function renderRecipeCards(recipes) {
+    const div = document.createElement('div');
+    div.className = 'message ai';
+    const metaEl = document.createElement('div');
+    metaEl.className = 'meta';
+    metaEl.innerHTML = `<span class="role-tag">recipes</span> ${recipes.length} recipe${recipes.length !== 1 ? 's' : ''}`;
+    div.appendChild(metaEl);
+
+    if (!recipes.length) {
+        div.appendChild(Object.assign(document.createElement('p'), { textContent: 'No recipes found.' }));
+    } else {
+        for (const r of recipes) {
+            const card = document.createElement('div');
+            card.className = 'recipe-card';
+
+            const rating = r.family_rating ? `<span class="recipe-rating">★ ${r.family_rating}/5</span>` : '';
+            const cuisine = r.cuisine ? `<span class="recipe-cuisine">${escapeHtml(r.cuisine)}</span>` : '';
+            const meta = [];
+            if (r.prep_time_min) meta.push(`Prep: ${r.prep_time_min}m`);
+            if (r.cook_time_min) meta.push(`Cook: ${r.cook_time_min}m`);
+            if (r.servings) meta.push(`Serves: ${r.servings}`);
+            const metaStr = meta.length ? `<div class="recipe-meta">${meta.join(' · ')}</div>` : '';
+
+            card.innerHTML = `
+                <div class="recipe-header" onclick="this.parentElement.classList.toggle('expanded')">
+                    <div class="recipe-title">${escapeHtml(r.title)} ${cuisine} ${rating}</div>
+                    ${metaStr}
+                    <span class="recipe-expand">▶</span>
+                </div>
+                <div class="recipe-detail">
+                    ${r.ingredients && r.ingredients.length ? `
+                        <div class="recipe-section">
+                            <strong>Ingredients (${r.ingredients.length})</strong>
+                            <ul>${r.ingredients.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+                        </div>` : ''}
+                    ${r.instructions && r.instructions.length ? `
+                        <div class="recipe-section">
+                            <strong>Instructions</strong>
+                            <ol>${r.instructions.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+                        </div>` : ''}
+                    ${r.notes ? `<div class="recipe-section"><strong>Notes</strong><p>${escapeHtml(r.notes)}</p></div>` : ''}
+                    ${r.source ? `<div class="recipe-section recipe-source">Source: ${escapeHtml(r.source)}</div>` : ''}
+                    ${r.source_url ? `<div class="recipe-section"><a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">${escapeHtml(r.source_url)}</a></div>` : ''}
+                    <div class="recipe-actions">
+                        <select class="recipe-rate-select" data-id="${r.id}">
+                            <option value="">Rate...</option>
+                            ${[1,2,3,4,5].map(n => `<option value="${n}" ${r.family_rating === n ? 'selected' : ''}>${'★'.repeat(n)}</option>`).join('')}
+                        </select>
+                        <button class="recipe-delete-btn" data-id="${r.id}" data-title="${escapeHtml(r.title)}">Delete</button>
+                    </div>
+                </div>
+            `;
+            div.appendChild(card);
+        }
+    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Wire up rate selects
+    div.querySelectorAll('.recipe-rate-select').forEach(sel => {
+        sel.addEventListener('change', async () => {
+            const id = sel.dataset.id;
+            const rating = parseInt(sel.value);
+            if (!rating) return;
+            try {
+                await fetch(`${API}/skills/recipes/${id}/rate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rating }),
+                });
+                addMessage(`Rated recipe ★${rating}`, 'ai', 'recipes');
+            } catch (e) { addMessage(`Error rating: ${e.message}`, 'ai', 'error'); }
+        });
+    });
+
+    // Wire up delete buttons
+    div.querySelectorAll('.recipe-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            const title = btn.dataset.title;
+            if (!confirm(`Delete "${title}"?`)) return;
+            try {
+                const resp = await fetch(`${API}/skills/recipes/${id}`, { method: 'DELETE' });
+                if (resp.ok) {
+                    btn.closest('.recipe-card').remove();
+                    addMessage(`Deleted: ${title}`, 'ai', 'recipes');
+                } else {
+                    addMessage('Could not delete recipe', 'ai', 'error');
+                }
+            } catch (e) { addMessage(`Error: ${e.message}`, 'ai', 'error'); }
+        });
+    });
 }
 
 

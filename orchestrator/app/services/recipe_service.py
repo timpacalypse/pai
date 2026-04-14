@@ -259,6 +259,8 @@ def parse_recipe_text(raw_text: str) -> dict:
             if not title:
                 # Skip common junk prefixes
                 clean = stripped.lstrip("#").strip().rstrip(":")
+                # Strip chat command prefixes like "save this recipe:"
+                clean = re.sub(r"^(save|add|store)\s+(this\s+)?recipe\s*:?\s*", "", clean, flags=re.IGNORECASE).strip()
                 if clean and len(clean) > 2:
                     title = clean
             elif not any([prep_time, cook_time, servings]) and stripped.lower().startswith("source"):
@@ -268,12 +270,10 @@ def parse_recipe_text(raw_text: str) -> dict:
                 # If we see bullet points early, guess ingredients
                 current_section = "ingredients"
                 item = re.sub(r"^[-•*–]\s*", "", stripped).strip()
-                item = re.sub(r"^\d+[\./\)]\s*", "", item).strip()
                 if item:
                     ingredients.append(item)
         elif current_section == "ingredients":
             item = re.sub(r"^[-•*–]\s*", "", stripped).strip()
-            item = re.sub(r"^\d+[\./\)]\s*", "", item).strip()
             if item:
                 # Auto-detect transition to instructions
                 if re.match(r"^(instructions|directions|steps|method)\s*:?\s*$", item, re.IGNORECASE):

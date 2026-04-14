@@ -288,6 +288,114 @@ select:focus, input[type="text"]:focus {
     float: right;
 }
 
+/* Recipe cards */
+.recipe-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 6px 0;
+    overflow: hidden;
+}
+.recipe-header {
+    padding: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.recipe-header:hover { background: rgba(79, 142, 247, 0.06); }
+.recipe-title {
+    flex: 1;
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 14px;
+}
+.recipe-cuisine {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(79, 142, 247, 0.12);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.recipe-rating {
+    font-size: 12px;
+    color: var(--warning);
+    font-weight: 600;
+}
+.recipe-meta {
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.recipe-expand {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+}
+.recipe-card.expanded .recipe-expand { transform: rotate(90deg); }
+.recipe-detail {
+    display: none;
+    padding: 0 12px 12px;
+    border-top: 1px solid var(--border);
+}
+.recipe-card.expanded .recipe-detail { display: block; }
+.recipe-section {
+    margin-top: 10px;
+}
+.recipe-section strong {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.recipe-section ul, .recipe-section ol {
+    padding-left: 20px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+.recipe-section li { color: var(--text-primary); }
+.recipe-section p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+.recipe-source { font-size: 12px; color: var(--text-muted); }
+.recipe-section a {
+    font-size: 12px;
+    color: var(--accent);
+    word-break: break-all;
+}
+.recipe-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+.recipe-rate-select {
+    background: var(--bg-chat);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.recipe-delete-btn {
+    background: transparent;
+    color: var(--error);
+    border: 1px solid var(--error);
+    border-radius: var(--radius);
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: auto;
+}
+.recipe-delete-btn:hover { background: rgba(244, 67, 54, 0.15); }
+
 /* Loading */
 .loading-dots {
     display: inline-flex;
