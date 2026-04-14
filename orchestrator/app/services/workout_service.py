@@ -163,7 +163,7 @@ async def get_logs(limit: int = 30, days_back: int | None = None) -> list[dict]:
         where = ""
         params: dict = {"limit": limit}
         if days_back:
-            where = "WHERE log_date >= CURRENT_DATE - :days"
+            where = "WHERE log_date >= CURRENT_DATE - CAST(:days AS INTEGER)"
             params["days"] = days_back
         result = await session.execute(
             text(f"SELECT * FROM workout_logs {where} ORDER BY log_date DESC, created_at DESC LIMIT :limit"),
@@ -295,31 +295,62 @@ async def process_workout_input(user_text: str, http_client=None) -> dict:
 # ── Context Builder (for chat / briefing) ────────────────────
 
 
-async def build_workout_context() -> str:
-    """Build a text summary of workout programs and recent activity."""
+async def build_workout_context(query: str = "") -> str:
+    """Build a text summary of workout programs and recent activity.
+    
+    If query mentions a specific day (e.g. 'friday'), show that day's workout.
+    """
     programs = await get_programs()
-    today = await get_todays_workout()
     recent = await get_logs(limit=10, days_back=7)
+
+    # Detect if user is asking about a specific day
+    target_dow = None
+    query_lower = query.lower() if query else ""
+    for name, dow in DAY_ABBREV.items():
+        if len(name) >= 3 and name in query_lower:
+            target_dow = dow
+            break
 
     lines = []
 
-    # Today's workout
-    if today["scheduled"]:
-        lines.append(f"TODAY ({today['day']}) — Scheduled:")
-        for s in today["scheduled"]:
-            lines.append(f"  • {s['activity']} — {s['duration_minutes']} min"
-                         + (f" ({s['notes']})" if s.get("notes") else ""))
+    if target_dow is not None:
+        # Show the requested day's workout
+        day_name = DAY_NAMES[target_dow]
+        day_programs = [p for p in programs if target_dow in p.get("days_of_week", [])]
+        if day_programs:
+            lines.append(f"{day_name.upper()} WORKOUT:")
+            for p in day_programs:
+                lines.append(f"  🏋️ {p['activity']} — {p['duration_minutes']} min")
+                if p.get("notes"):
+                    for note_line in p["notes"].split("\n"):
+                        note_line = note_line.strip()
+                        if note_line:
+                            lines.append(f"    {note_line}")
+        else:
+            lines.append(f"{day_name.upper()} — Rest day (no scheduled workouts)")
     else:
-        lines.append(f"TODAY ({today['day']}) — Rest day (no scheduled workouts)")
+        # Show today's workout
+        today = await get_todays_workout()
+        if today["scheduled"]:
+            lines.append(f"TODAY ({today['day']}) — Scheduled:")
+            for s in today["scheduled"]:
+                lines.append(f"  • {s['activity']} — {s['duration_minutes']} min")
+                if s.get("notes"):
+                    for note_line in s["notes"].split("\n"):
+                        note_line = note_line.strip()
+                        if note_line:
+                            lines.append(f"    {note_line}")
+        else:
+            lines.append(f"TODAY ({today['day']}) — Rest day (no scheduled workouts)")
 
-    if today["completed"]:
-        lines.append("COMPLETED TODAY:")
-        for c in today["completed"]:
-            lines.append(f"  ✓ {c['activity']} — {c['duration_minutes']} min")
+        if today["completed"]:
+            lines.append("COMPLETED TODAY:")
+            for c in today["completed"]:
+                lines.append(f"  ✓ {c['activity']} — {c['duration_minutes']} min")
 
-    # Active programs
+    # Active programs summary
     if programs:
-        lines.append("\nACTIVE PROGRAMS:")
+        lines.append("\nWEEKLY SCHEDULE:")
         for p in programs:
             lines.append(f"  {p['activity']} — {p['days_display']} ({p['duration_minutes']} min)")
 

@@ -509,7 +509,7 @@ def register_all_skills():
     # ── Workout Tracking ──
     async def _workout_read(message, http_client=None):
         from app.services.workout_service import build_workout_context
-        return await build_workout_context()
+        return await build_workout_context(message)
 
     async def _workout_write(message, http_client=None):
         from app.services.workout_service import process_workout_input
@@ -522,8 +522,8 @@ def register_all_skills():
     register_skill(Skill(
         id="workout",
         name="Workout Program",
-        description="Track workout programs, log exercises and activities like peloton, weights, sauna, cold plunge",
-        examples=["peloton M-W-F 30 minutes", "sauna 20 minutes cold plunge 5", "what's my workout today", "chest workout Tuesday Thursday"],
+        description="View workout schedule for any day, check today's exercises; log activities like peloton, weights, sauna, cold plunge",
+        examples=["what's my workout today", "what is friday's workout", "peloton M-W-F 30 minutes", "sauna 20 minutes cold plunge 5"],
         read_handler=_workout_read,
         write_handler=_workout_write,
         category="family",

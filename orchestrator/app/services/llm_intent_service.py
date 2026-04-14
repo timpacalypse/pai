@@ -77,7 +77,9 @@ async def classify_chat_intent(
             model="qwen3:4b",
             http_client=http_client,
         )
+        logger.info("classifier_raw_response", extra={"raw": raw[:500]})
         parsed = _parse_json(raw)
+        logger.info("classifier_parsed", extra={"parsed": str(parsed)})
         if parsed:
             action = parsed.get("action", "conversation")
             skill = parsed.get("skill", "none")
@@ -148,8 +150,11 @@ async def infer_roles_llm(
 
 
 def _parse_json(raw: str) -> dict | None:
-    """Extract JSON from LLM response, handling markdown fences."""
+    """Extract JSON from LLM response, handling markdown fences and <think> tags."""
+    import re
     text = raw.strip()
+    # Strip qwen3 thinking tags
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     if text.startswith("```"):
         lines = text.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]
