@@ -937,7 +937,7 @@ async function handleMedicalUpload(event) {
         if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
         const data = await resp.json();
         loadingEl.remove();
-        const chunks = data.chunks_stored || 0;
+        const chunks = data.stored || data.chunks || 0;
         addMessage(
             `Uploaded and ingested "${file.name}" — ${chunks} chunks stored in semantic memory. ` +
             `You can now ask questions about this document in chat.`,
@@ -965,7 +965,7 @@ async function handleHomeUpload(event) {
         if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
         const data = await resp.json();
         loadingEl.remove();
-        const chunks = data.chunks_stored || 0;
+        const chunks = data.stored || data.chunks || 0;
         addMessage(
             `Uploaded and ingested "${file.name}" — ${chunks} chunks stored in semantic memory. ` +
             `You can now ask questions about this document in chat.`,
