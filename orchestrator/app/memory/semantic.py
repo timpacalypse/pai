@@ -43,23 +43,33 @@ async def search_semantic(
     query: str,
     limit: int = 5,
     http_client=None,
+    source_prefix: str | None = None,
 ) -> list[dict]:
-    """Search semantic_memory by vector similarity. Returns matching content."""
+    """Search semantic_memory by vector similarity. Returns matching content.
+    
+    If source_prefix is set, only search entries whose source starts with that prefix.
+    """
     embedding = await get_embedding(query, http_client=http_client)
     if not embedding:
         return []
 
+    source_filter = "AND source LIKE :source_prefix" if source_prefix else ""
+
     async with async_session() as session:
+        params: dict = {"embedding": str(embedding), "limit": limit}
+        if source_prefix:
+            params["source_prefix"] = f"{source_prefix}%"
+
         result = await session.execute(
             text(
-                "SELECT id, content, source, metadata, "
-                "1 - (embedding <=> CAST(:embedding AS vector)) AS similarity "
-                "FROM semantic_memory "
-                "WHERE embedding IS NOT NULL "
-                "ORDER BY embedding <=> CAST(:embedding AS vector) "
-                "LIMIT :limit"
+                f"SELECT id, content, source, metadata, "
+                f"1 - (embedding <=> CAST(:embedding AS vector)) AS similarity "
+                f"FROM semantic_memory "
+                f"WHERE embedding IS NOT NULL {source_filter} "
+                f"ORDER BY embedding <=> CAST(:embedding AS vector) "
+                f"LIMIT :limit"
             ),
-            {"embedding": str(embedding), "limit": limit},
+            params,
         )
         rows = []
         for row in result.mappings():

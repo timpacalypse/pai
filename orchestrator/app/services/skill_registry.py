@@ -88,7 +88,21 @@ def register_all_skills():
     # ── Medical Records ──
     async def _medical_read(message, http_client=None):
         from app.services.medical_service import build_medical_context
-        return await build_medical_context()
+        from app.memory.semantic import search_semantic
+        parts = []
+        # Search ingested documents only (PDFs, lab results) — filter by source
+        docs = await search_semantic(
+            message, limit=5, http_client=http_client, source_prefix="file:"
+        )
+        if docs:
+            parts.append("Ingested medical documents:")
+            for d in docs:
+                parts.append(f"  [{d['source']}]\n{d['content']}")
+        # Also include structured medical records
+        records_ctx = await build_medical_context()
+        if records_ctx:
+            parts.append(records_ctx)
+        return "\n\n".join(parts) if parts else "No medical records or documents found."
 
     async def _medical_write(message, http_client=None):
         from app.services.medical_service import process_medical_input
