@@ -106,8 +106,21 @@ async def ingest_file(
     return result
 
 
+def _text_quality_score(text: str) -> float:
+    """Estimate text quality. Returns 0.0-1.0 based on readable word ratio."""
+    import re
+    words = text.split()
+    if not words:
+        return 0.0
+    # Count words that look like real English (letters, common punctuation)
+    readable = sum(1 for w in words if re.match(r'^[A-Za-z\'\-,.;:!?()]+$', w.strip('.,;:!?()"')))
+    return readable / len(words)
+
+
 def _extract_pdf(path: Path) -> str:
     """Extract text from a PDF file using pdfplumber, with OCR fallback for scanned docs."""
+    pdfplumber_text = ""
+
     # Try pdfplumber first (fast, works for text-layer PDFs)
     try:
         import pdfplumber
@@ -118,14 +131,23 @@ def _extract_pdf(path: Path) -> str:
                 if page_text:
                     pages.append(page_text)
         if pages:
-            logger.info("pdf_extracted_text_layer pages=%d path=%s", len(pages), path.name)
-            return "\n\n".join(pages)
+            pdfplumber_text = "\n\n".join(pages)
+            quality = _text_quality_score(pdfplumber_text)
+            logger.info(
+                "pdf_text_layer pages=%d quality=%.2f path=%s",
+                len(pages), quality, path.name,
+            )
+            # Only skip OCR if text layer quality is very high (native digital PDF)
+            if quality >= 0.85:
+                return pdfplumber_text
+            # Otherwise fall through to OCR and compare
+            logger.info("pdf_text_layer_moderate quality=%.2f, will compare with OCR path=%s", quality, path.name)
     except ImportError:
         logger.warning("pdfplumber not installed — trying OCR directly")
     except Exception as e:
         logger.error("pdf_pdfplumber_failed: %s", e)
 
-    # Fallback: OCR for scanned/image PDFs
+    # Fallback: OCR for scanned/image PDFs or low-quality text layers
     try:
         from pdf2image import convert_from_path
         import pytesseract
@@ -138,16 +160,31 @@ def _extract_pdf(path: Path) -> str:
             if text and text.strip():
                 pages.append(text.strip())
         if pages:
-            logger.info("pdf_ocr_extracted pages=%d path=%s", len(pages), path.name)
-            return "\n\n".join(pages)
+            ocr_text = "\n\n".join(pages)
+            ocr_quality = _text_quality_score(ocr_text)
+            logger.info(
+                "pdf_ocr_extracted pages=%d quality=%.2f path=%s",
+                len(pages), ocr_quality, path.name,
+            )
+            # If we also have pdfplumber text, pick the better one
+            if pdfplumber_text:
+                plumber_quality = _text_quality_score(pdfplumber_text)
+                if plumber_quality >= ocr_quality:
+                    logger.info("pdf_using_text_layer (%.2f >= %.2f) path=%s", plumber_quality, ocr_quality, path.name)
+                    return pdfplumber_text
+                logger.info("pdf_using_ocr (%.2f > %.2f) path=%s", ocr_quality, plumber_quality, path.name)
+            return ocr_text
         logger.warning("pdf_ocr_no_text path=%s", path.name)
-        return ""
     except ImportError:
         logger.warning("pytesseract/pdf2image not installed — OCR unavailable")
-        return ""
     except Exception as e:
         logger.error("pdf_ocr_failed: %s", e)
-        return ""
+
+    # Last resort: return whatever pdfplumber got, even if low quality
+    if pdfplumber_text:
+        logger.info("pdf_fallback_to_text_layer path=%s", path.name)
+        return pdfplumber_text
+    return ""
 
 
 async def _store_chunks(
