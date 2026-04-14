@@ -778,7 +778,28 @@ async def ingest_file(request: Request):
 
 @router.post("/skills/medical/tell")
 async def medical_tell(req: MedicalTellRequest, request: Request):
-    """Tell PAI about a medical event in natural language."""
+    """Tell PAI about a medical event, or ask about medical history/documents."""
+    import re
+    lower = req.text.lower().strip()
+    read_patterns = [
+        r'^(what|when|where|which|show|list|read|tell me|get|display|retrieve|pull up|do |does |did |has |have |is |are |was |were )',
+        r'(recommend|results|history|summary|lab\b|labs\b|records|shots?|vaccin|immuniz|medications?|diagnosis|allergies)',
+        r'\?$',
+        r'^how (is|are|was|were)',
+    ]
+    is_read = any(re.search(p, lower) for p in read_patterns)
+    if is_read:
+        from app.services.skill_registry import get_skill
+        skill = get_skill("medical")
+        if skill and skill.read_handler:
+            context = await skill.read_handler(req.text, http_client=request.app.state.http_client)
+            from app.services.ollama_service import generate
+            response = await generate(
+                prompt=f"Based on the following medical data, answer the user's question.\n\nMedical data:\n{context}\n\nUser question: {req.text}",
+                system_prompt="You are a knowledgeable family health assistant. Provide clear, helpful answers based on the medical data provided. Always recommend consulting a healthcare provider for medical decisions.",
+                http_client=request.app.state.http_client,
+            )
+            return {"actions": [f"✓ {response}"], "family_member": "Tim"}
     from app.services.medical_service import process_medical_input
     return await process_medical_input(req.text, http_client=request.app.state.http_client)
 
