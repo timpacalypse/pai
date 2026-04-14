@@ -894,6 +894,14 @@ init();
 // ── Medical Mode ──
 
 async function handleMedicalInput(text) {
+    // Route read/query requests through chat for proper skill handling
+    const lower = text.toLowerCase();
+    const readSignals = ['what ', 'show ', 'list ', 'read ', 'tell me', 'recommend', 'results', 'history', 'summary', 'how is', 'how are'];
+    const isRead = readSignals.some(s => lower.startsWith(s) || lower.includes(s));
+    if (isRead) {
+        // Send through chat so the skill registry read handler runs
+        return await sendChat(text);
+    }
     const resp = await fetch(`${API}/skills/medical/tell`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
