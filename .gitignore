@@ -7,3 +7,5 @@ __pycache__/
 .pytest_cache/
 credentials/google_credentials.json
 credentials/google_token.json
+uploads/*
+!uploads/.gitkeep

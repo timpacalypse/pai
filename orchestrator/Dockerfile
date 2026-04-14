@@ -2,9 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (including OCR for scanned PDFs)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libpq-dev && \
+    apt-get install -y --no-install-recommends gcc libpq-dev tesseract-ocr poppler-utils && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

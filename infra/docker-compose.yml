@@ -20,6 +20,7 @@ services:
     volumes:
       - ../orchestrator/app:/app/app
       - ../credentials:/app/credentials
+      - ../uploads:/app/uploads
     networks:
       - pai-net
     restart: unless-stopped

@@ -107,7 +107,8 @@ async def ingest_file(
 
 
 def _extract_pdf(path: Path) -> str:
-    """Extract text from a PDF file using pdfplumber (or fallback)."""
+    """Extract text from a PDF file using pdfplumber, with OCR fallback for scanned docs."""
+    # Try pdfplumber first (fast, works for text-layer PDFs)
     try:
         import pdfplumber
         pages = []
@@ -116,12 +117,36 @@ def _extract_pdf(path: Path) -> str:
                 page_text = page.extract_text()
                 if page_text:
                     pages.append(page_text)
-        return "\n\n".join(pages)
+        if pages:
+            logger.info("pdf_extracted_text_layer pages=%d path=%s", len(pages), path.name)
+            return "\n\n".join(pages)
     except ImportError:
-        logger.warning("pdfplumber not installed — PDF extraction unavailable")
+        logger.warning("pdfplumber not installed — trying OCR directly")
+    except Exception as e:
+        logger.error("pdf_pdfplumber_failed: %s", e)
+
+    # Fallback: OCR for scanned/image PDFs
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+
+        logger.info("pdf_ocr_starting path=%s", path.name)
+        images = convert_from_path(str(path), dpi=300)
+        pages = []
+        for i, img in enumerate(images):
+            text = pytesseract.image_to_string(img)
+            if text and text.strip():
+                pages.append(text.strip())
+        if pages:
+            logger.info("pdf_ocr_extracted pages=%d path=%s", len(pages), path.name)
+            return "\n\n".join(pages)
+        logger.warning("pdf_ocr_no_text path=%s", path.name)
+        return ""
+    except ImportError:
+        logger.warning("pytesseract/pdf2image not installed — OCR unavailable")
         return ""
     except Exception as e:
-        logger.error("pdf_extract_failed: %s", e)
+        logger.error("pdf_ocr_failed: %s", e)
         return ""
 
 
