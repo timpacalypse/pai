@@ -164,3 +164,174 @@ async def build_recipe_context(search: str = "") -> str:
         if r.get("cuisine"):
             lines[-1] += f" [{r['cuisine']}]"
     return "\n".join(lines)
+
+
+import re
+
+def parse_recipe_text(raw_text: str) -> dict:
+    """Parse pasted recipe text into structured fields without LLM.
+    
+    Handles common recipe layouts:
+    - Title on first non-empty line
+    - Sections identified by headings like 'Ingredients', 'Instructions', 'Directions', 'Notes'
+    - Servings/prep/cook time extracted from metadata lines
+    """
+    lines = raw_text.strip().split("\n")
+    if not lines:
+        return {"error": "Empty input"}
+
+    title = ""
+    ingredients: list[str] = []
+    instructions: list[str] = []
+    notes_lines: list[str] = []
+    source = ""
+    source_url = ""
+    cuisine = ""
+    prep_time = 0
+    cook_time = 0
+    servings = 0
+    tags: list[str] = []
+
+    # Section detection patterns
+    section_patterns = {
+        "ingredients": re.compile(r"^(ingredients|what you.?ll need|you.?ll need)\s*:?\s*$", re.IGNORECASE),
+        "instructions": re.compile(r"^(instructions|directions|steps|method|preparation|how to make)\s*:?\s*$", re.IGNORECASE),
+        "notes": re.compile(r"^(notes|tips|variations|chef.?s? notes?|storage)\s*:?\s*$", re.IGNORECASE),
+    }
+
+    # Metadata patterns
+    time_re = re.compile(r"(\d+)\s*(min|minute|hour|hr)", re.IGNORECASE)
+    servings_re = re.compile(r"(?:serves?|servings?|yield|makes)\s*:?\s*(\d+)", re.IGNORECASE)
+    prep_re = re.compile(r"^\s*prep\s*(?:time)?\s*:?\s*(\d+)\s*(min|minute|hour|hr)", re.IGNORECASE)
+    cook_re = re.compile(r"^\s*(?:cook|bake|roast)\s*(?:time)?\s*:\s*(\d+)\s*(min|minute|hour|hr)", re.IGNORECASE)
+    total_re = re.compile(r"total\s*(?:time)?\s*:?\s*(\d+)\s*(min|minute|hour|hr)", re.IGNORECASE)
+    url_re = re.compile(r"https?://\S+")
+    cuisine_re = re.compile(r"cuisine\s*:?\s*(.+)", re.IGNORECASE)
+
+    current_section = "preamble"
+    step_counter = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Check for section headers
+        matched_section = False
+        for sec_name, pattern in section_patterns.items():
+            if pattern.match(stripped):
+                current_section = sec_name
+                matched_section = True
+                break
+        if matched_section:
+            continue
+
+        # Extract metadata only from preamble
+        if current_section == "preamble":
+            pm = prep_re.search(stripped)
+            if pm:
+                val = int(pm.group(1))
+                prep_time = val * 60 if "hour" in pm.group(2).lower() or "hr" in pm.group(2).lower() else val
+                continue
+
+            cm = cook_re.search(stripped)
+            if cm:
+                val = int(cm.group(1))
+                cook_time = val * 60 if "hour" in cm.group(2).lower() or "hr" in cm.group(2).lower() else val
+                continue
+
+            sm = servings_re.search(stripped)
+            if sm:
+                servings = int(sm.group(1))
+                continue
+
+        um = url_re.search(stripped)
+        if um:
+            source_url = um.group(0)
+
+        cum = cuisine_re.match(stripped)
+        if cum:
+            cuisine = cum.group(1).strip()
+            continue
+
+        # Assign to sections
+        if current_section == "preamble":
+            if not title:
+                # Skip common junk prefixes
+                clean = stripped.lstrip("#").strip().rstrip(":")
+                if clean and len(clean) > 2:
+                    title = clean
+            elif not any([prep_time, cook_time, servings]) and stripped.lower().startswith("source"):
+                source = stripped.split(":", 1)[-1].strip() if ":" in stripped else stripped
+            # Auto-detect section start without header
+            elif stripped.startswith(("- ", "• ", "* ", "– ")) or re.match(r"^\d+[\./\)]\s", stripped):
+                # If we see bullet points early, guess ingredients
+                current_section = "ingredients"
+                item = re.sub(r"^[-•*–]\s*", "", stripped).strip()
+                item = re.sub(r"^\d+[\./\)]\s*", "", item).strip()
+                if item:
+                    ingredients.append(item)
+        elif current_section == "ingredients":
+            item = re.sub(r"^[-•*–]\s*", "", stripped).strip()
+            item = re.sub(r"^\d+[\./\)]\s*", "", item).strip()
+            if item:
+                # Auto-detect transition to instructions
+                if re.match(r"^(instructions|directions|steps|method)\s*:?\s*$", item, re.IGNORECASE):
+                    current_section = "instructions"
+                else:
+                    ingredients.append(item)
+        elif current_section == "instructions":
+            step = re.sub(r"^\d+[\./\)]\s*", "", stripped).strip()
+            step = re.sub(r"^[-•*–]\s*", "", step).strip()
+            if step:
+                if re.match(r"^(notes|tips)\s*:?\s*$", step, re.IGNORECASE):
+                    current_section = "notes"
+                else:
+                    instructions.append(step)
+        elif current_section == "notes":
+            note = re.sub(r"^[-•*–]\s*", "", stripped).strip()
+            if note:
+                notes_lines.append(note)
+
+    if not title:
+        title = lines[0].strip().lstrip("#").strip() if lines else "Untitled Recipe"
+
+    return {
+        "title": title,
+        "ingredients": ingredients,
+        "instructions": instructions,
+        "source": source,
+        "source_url": source_url,
+        "cuisine": cuisine,
+        "prep_time_min": prep_time,
+        "cook_time_min": cook_time,
+        "servings": servings,
+        "tags": tags,
+        "notes": "\n".join(notes_lines),
+    }
+
+
+async def ingest_recipe_text(raw_text: str) -> dict:
+    """Parse raw recipe text and save it. No LLM needed."""
+    parsed = parse_recipe_text(raw_text)
+    if parsed.get("error"):
+        return parsed
+
+    if not parsed.get("ingredients") and not parsed.get("instructions"):
+        return {"error": "Could not find ingredients or instructions in the text. "
+                "Try formatting with 'Ingredients' and 'Instructions' headings."}
+
+    recipe = await save_recipe(
+        title=parsed["title"],
+        ingredients=parsed["ingredients"],
+        instructions=parsed["instructions"],
+        source=parsed["source"],
+        source_url=parsed["source_url"],
+        cuisine=parsed["cuisine"],
+        prep_time_min=parsed["prep_time_min"],
+        cook_time_min=parsed["cook_time_min"],
+        servings=parsed["servings"],
+        tags=parsed["tags"],
+        notes=parsed["notes"],
+    )
+    return {"recipe": recipe, "parsed_fields": {k: len(v) if isinstance(v, list) else bool(v) for k, v in parsed.items()}}

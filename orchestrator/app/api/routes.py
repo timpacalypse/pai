@@ -937,6 +937,20 @@ async def remove_recipe(recipe_id: int):
     return {"deleted": True}
 
 
+@router.post("/skills/recipes/paste")
+async def paste_recipe(request: Request):
+    """Parse and save a pasted recipe — no LLM, no token limit."""
+    from app.services.recipe_service import ingest_recipe_text
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No recipe text provided")
+    result = await ingest_recipe_text(text)
+    if result.get("error"):
+        raise HTTPException(status_code=422, detail=result["error"])
+    return result
+
+
 # ── Calendar / Events ───────────────────────────────────────────
 
 

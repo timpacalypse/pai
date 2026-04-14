@@ -198,29 +198,18 @@ def register_all_skills():
         return "\n".join(lines)
 
     async def _recipe_write(message, http_client=None):
-        from app.services.recipe_service import save_recipe
-        from app.services.ollama_service import generate
-        # Use LLM to extract recipe from natural language
-        raw = await generate(
-            prompt=f"Extract a recipe from this message and return JSON with keys: title, cuisine, prep_time_min, cook_time_min, servings, ingredients (list of strings), instructions (list of strings), notes. Message: {message}",
-            system_prompt="You are a recipe parser. Return only valid JSON.",
-            model="qwen3:4b",
-            http_client=http_client,
-        )
-        import json
-        try:
-            text = raw.strip()
-            if text.startswith("```"):
-                text = "\n".join(l for l in text.split("\n") if not l.strip().startswith("```"))
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            recipe_data = json.loads(text[start:end]) if start >= 0 else {}
-        except Exception:
-            return "I couldn't parse that as a recipe. Try providing title, ingredients, and instructions."
-        if not recipe_data.get("title"):
-            return "I need at least a recipe title to save."
-        result = await save_recipe(recipe_data)
-        return f"Saved recipe: {result.get('title', 'unknown')}"
+        from app.services.recipe_service import ingest_recipe_text
+        result = await ingest_recipe_text(message)
+        if result.get("error"):
+            return f"Could not parse recipe: {result['error']}"
+        r = result["recipe"]
+        fields = result["parsed_fields"]
+        parts = [f"Saved recipe: {r['title']}"]
+        if fields.get("ingredients"):
+            parts.append(f"{fields['ingredients']} ingredients")
+        if fields.get("instructions"):
+            parts.append(f"{fields['instructions']} steps")
+        return " · ".join(parts)
 
     register_skill(Skill(
         id="recipes",

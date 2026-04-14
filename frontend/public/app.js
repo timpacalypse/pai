@@ -974,7 +974,7 @@ async function handleHomeUpload(event) {
 // ── Recipes Mode ──
 
 async function handleRecipeInput(text) {
-    // If it looks like a search, search. Otherwise save as a recipe title.
+    // If it looks like a search, search. Otherwise parse and save the pasted recipe.
     const lower = text.toLowerCase();
     if (lower.startsWith('search ') || lower.startsWith('find ')) {
         const query = text.replace(/^(search|find)\s+/i, '');
@@ -986,15 +986,25 @@ async function handleRecipeInput(text) {
         });
         return null;
     }
-    // Save as recipe
-    const resp = await fetch(`${API}/skills/recipes`, {
+    // Paste recipe — uses deterministic parser, no LLM, no token limit
+    const resp = await fetch(`${API}/skills/recipes/paste`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: text }),
+        body: JSON.stringify({ text }),
     });
-    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        addMessage(`Could not parse recipe: ${err.detail || 'Unknown error'}. Try adding "Ingredients" and "Instructions" headings.`, 'ai', 'error');
+        return null;
+    }
     const data = await resp.json();
-    addMessage(`Saved recipe: ${data.title}`, 'ai', 'recipes');
+    const r = data.recipe;
+    const fields = data.parsed_fields;
+    let summary = `Saved: **${r.title}**`;
+    if (fields.ingredients) summary += ` · ${fields.ingredients} ingredients`;
+    if (fields.instructions) summary += ` · ${fields.instructions} steps`;
+    if (r.cuisine) summary += ` · ${r.cuisine}`;
+    addMessage(summary, 'ai', 'recipes');
     return null;
 }
 
