@@ -113,6 +113,7 @@ class ChatRequest(BaseModel):
     conversation_id: UUID = Field(default_factory=uuid4)
     history: list[ChatMessage] = []
     request_id: UUID = Field(default_factory=uuid4)
+    user_id: int | None = None
 
 
 class ChatResponse(BaseModel):

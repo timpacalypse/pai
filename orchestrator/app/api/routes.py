@@ -410,6 +410,10 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float) ->
             domain=roles.primary.domain.value,
             duration_ms=round(duration_ms, 2),
         )
+        # Persist conversation record if user_id provided
+        if getattr(req, "user_id", None):
+            from app.services.conversation_service import ensure_conversation
+            await ensure_conversation(req.conversation_id, req.user_id, title=req.message[:60])
     asyncio.create_task(_log())
 
     return ChatResponse(
@@ -1333,3 +1337,80 @@ async def workout_logs(limit: int = 30, days_back: int | None = None):
     from app.services.workout_service import get_logs
     logs = await get_logs(limit=limit, days_back=days_back)
     return {"logs": logs}
+
+
+# ── User Authentication ─────────────────────────────────────────
+
+
+@router.post("/auth/login")
+async def user_login(request: Request):
+    """Login or create a user by first name. Returns user info."""
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    from app.services.user_service import login_or_create
+    result = await login_or_create(name)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.get("/auth/users")
+async def list_all_users():
+    """List all users for the login screen."""
+    from app.services.user_service import list_users
+    users = await list_users()
+    return {"users": users}
+
+
+# ── Conversations (per user) ────────────────────────────────────
+
+
+@router.get("/conversations")
+async def get_conversations(user_id: int, limit: int = 30):
+    """Get a user's conversation history."""
+    from app.services.conversation_service import get_user_conversations
+    convos = await get_user_conversations(user_id, limit=limit)
+    return {"conversations": convos}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def remove_conversation(conversation_id: str):
+    """Delete a conversation and its chat history."""
+    from uuid import UUID
+    from app.services.conversation_service import delete_conversation
+    try:
+        cid = UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+    deleted = await delete_conversation(cid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True}
+
+
+# ── Memory Consolidation ────────────────────────────────────────
+
+
+@router.post("/memory/consolidate")
+async def consolidate_mem(request: Request):
+    """Merge duplicate semantic memory entries."""
+    from app.services.memory_consolidation import consolidate_memory
+    result = await consolidate_memory(http_client=request.app.state.http_client)
+    return result
+
+
+@router.post("/memory/prune")
+async def prune_mem():
+    """Remove low-quality semantic memory entries."""
+    from app.services.memory_consolidation import prune_low_quality
+    result = await prune_low_quality()
+    return result
+
+
+@router.get("/memory/stats")
+async def memory_stats():
+    """Get semantic memory statistics."""
+    from app.services.memory_consolidation import get_memory_stats
+    return await get_memory_stats()

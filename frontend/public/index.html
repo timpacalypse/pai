@@ -4,15 +4,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PAI — Personal AI</title>
-    <link rel="stylesheet" href="styles.css?v=20260414">
+    <link rel="stylesheet" href="styles.css?v=20260415">
 </head>
 <body>
-    <div id="app">
+    <!-- Login Screen -->
+    <div id="login-screen">
+        <div class="login-box">
+            <h1>PAI</h1>
+            <span class="login-subtitle">Personal AI Orchestrator</span>
+            <div id="existing-users"></div>
+            <div class="login-new">
+                <input type="text" id="login-name" placeholder="Enter your first name..." maxlength="50" autocomplete="off">
+                <button id="login-btn">Sign In</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- App (hidden until login) -->
+    <div id="app" class="hidden">
         <!-- Sidebar -->
         <aside id="sidebar">
             <div class="sidebar-header">
                 <h1>PAI</h1>
-                <span class="subtitle">Personal AI Orchestrator</span>
+                <div class="user-info">
+                    <span id="user-name-display"></span>
+                    <button id="logout-btn" class="logout-btn" title="Switch User">&#x21C4;</button>
+                </div>
+            </div>
+
+            <!-- Conversation History -->
+            <div class="sidebar-section">
+                <label>Conversations</label>
+                <button id="new-chat-btn" class="secondary-btn" style="width:100%;margin-bottom:6px">+ New Chat</button>
+                <div id="conversation-list" class="conversation-list"></div>
             </div>
 
             <div class="sidebar-section">
@@ -41,6 +65,7 @@
                     <button class="mode-btn" data-mode="medical">Medical</button>
                     <button class="mode-btn" data-mode="recipes">Recipes</button>
                     <button class="mode-btn" data-mode="calendar">Calendar</button>
+                    <button class="mode-btn" data-mode="workout">Workout</button>
                     <button class="mode-btn" data-mode="skills">Skills</button>
                 </div>
             </div>
@@ -111,6 +136,12 @@
                 </label>
             </div>
 
+            <div id="workout-options" class="sidebar-section hidden">
+                <button id="workout-today-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Today's Workout</button>
+                <button id="workout-programs-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">View Programs</button>
+                <button id="workout-logs-btn" class="secondary-btn" style="width:100%">Recent Logs</button>
+            </div>
+
             <div id="skills-options" class="sidebar-section hidden">
                 <button id="skills-load-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Refresh Skills</button>
             </div>
@@ -139,6 +170,6 @@
         </main>
     </div>
 
-    <script src="app.js?v=20260414"></script>
+    <script src="app.js?v=20260415"></script>
 </body>
 </html>

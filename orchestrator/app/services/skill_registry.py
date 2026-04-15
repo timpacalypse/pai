@@ -89,16 +89,46 @@ def register_all_skills():
     async def _medical_read(message, http_client=None):
         from app.services.medical_service import build_medical_context
         from app.memory.semantic import search_semantic
+        from app.services.family_preference_service import get_family_members
+
+        # Detect family member names in the query to scope results
+        members = await get_family_members()
+        mentioned_names = []
+        msg_lower = message.lower()
+        for m in members:
+            name = m["name"].lower()
+            # Check for name or notes (e.g. "Azure" in notes for "Kellan")
+            if name in msg_lower:
+                mentioned_names.append(m["name"])
+            elif m.get("notes"):
+                for alias in m["notes"].lower().split():
+                    if len(alias) > 2 and alias in msg_lower:
+                        mentioned_names.append(m["name"])
+                        break
+
         parts = []
-        # Search ingested documents only (PDFs, lab results) — filter by source
-        docs = await search_semantic(
-            message, limit=5, http_client=http_client, source_prefix="file:"
-        )
-        if docs:
-            parts.append("Ingested medical documents:")
-            for d in docs:
-                parts.append(f"  [{d['source']}]\n{d['content']}")
-        # Also include structured medical records
+        if mentioned_names:
+            # Search documents scoped to each mentioned family member
+            for name in mentioned_names:
+                docs = await search_semantic(
+                    message, limit=5, http_client=http_client,
+                    source_prefix=f"file:{name}",
+                )
+                if docs:
+                    parts.append(f"Documents for {name}:")
+                    for d in docs:
+                        parts.append(f"  [{d['source']}]\n{d['content']}")
+        else:
+            # No specific family member — search all medical documents
+            docs = await search_semantic(
+                message, limit=5, http_client=http_client, source_prefix="file:"
+            )
+            if docs:
+                parts.append("Ingested medical documents:")
+                for d in docs:
+                    parts.append(f"  [{d['source']}]\n{d['content']}")
+
+        # Also include structured medical records (optionally filtered)
         records_ctx = await build_medical_context()
         if records_ctx:
             parts.append(records_ctx)

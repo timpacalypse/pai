@@ -2,10 +2,14 @@
 
 Uses a dynamic skill registry so new skills are automatically accessible
 via natural language without changing routing code.
+
+Includes a fast rule-based pre-classifier for common patterns to avoid
+unnecessary LLM calls and improve accuracy.
 """
 
 import json
 import logging
+import re
 
 import httpx
 
@@ -14,6 +18,81 @@ from app.services.ollama_service import generate
 logger = logging.getLogger("pai.llm_intent")
 
 _cached_classifier_prompt: str | None = None
+
+
+# ── Rule-based pre-classifier ────────────────────────────────
+
+_RULE_PATTERNS: list[tuple[str, dict]] = [
+    # Calendar
+    (r'\b(calendar|agenda|schedule|appointment)\b', {"skill": "calendar", "domain": "family", "role": "family_activity_coordinator"}),
+    (r'\bwhat\'?s (on )?(my |the )?(calendar|agenda|schedule)\b', {"action": "query", "skill": "calendar", "domain": "family", "role": "family_activity_coordinator"}),
+    (r'\b(add|schedule|create) .*(appointment|meeting|event)\b', {"action": "execute", "skill": "calendar", "domain": "family", "role": "family_activity_coordinator"}),
+
+    # Medical
+    (r'\b(medical|health record|doctor|vaccination|immuniz|shot|medication|prescription|lab result|checkup|dental)\b', {"skill": "medical", "domain": "family", "role": "parent"}),
+    (r'\b(when were|what are|show|list).*(shots?|vaccin|medications?|medical|health)\b', {"action": "query", "skill": "medical", "domain": "family", "role": "parent"}),
+
+    # Workout
+    (r'\b(workout|exercise|peloton|sauna|cold plunge|weights?|gym|fitness|training)\b', {"skill": "workout", "domain": "personal", "role": "fitness_longevity_optimist"}),
+    (r'\bwhat\'?s (my |today\'?s? )?workout\b', {"action": "query", "skill": "workout", "domain": "personal", "role": "fitness_longevity_optimist"}),
+    (r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\'?s? workout\b', {"action": "query", "skill": "workout", "domain": "personal", "role": "fitness_longevity_optimist"}),
+
+    # Recipes
+    (r'\b(recipe|recipes|cooking|ingredients?|instructions?)\b', {"skill": "recipes", "domain": "family", "role": "family_chef"}),
+    (r'\b(find|search|show) .*(recipe|recipes)\b', {"action": "query", "skill": "recipes", "domain": "family", "role": "family_chef"}),
+
+    # Meals
+    (r'\b(meal plan|dinner this week|what\'?s for dinner|breakfast|lunch)\b', {"skill": "meal_planning", "domain": "family", "role": "family_chef"}),
+
+    # Home
+    (r'\b(home|maintenance|hvac|plumbing|filter|appliance|furnace|water heater)\b', {"skill": "home", "domain": "family", "role": "parent"}),
+    (r'\b(overdue|maintenance due|home alert)\b', {"action": "query", "skill": "home", "domain": "family", "role": "parent"}),
+
+    # Briefing
+    (r'\b(briefing|morning brief|daily brief|what\'?s my day)\b', {"skill": "briefing", "domain": "professional", "role": "cybersecurity_executive"}),
+
+    # Research
+    (r'\b(research|search the web|find articles|latest news)\b', {"skill": "web_research", "domain": "professional", "role": "ai_cybersecurity_strategist"}),
+
+    # Memory
+    (r'\b(what do you know|search memory|recall|remember when)\b', {"action": "query", "skill": "memory", "domain": "professional", "role": "polymath_in_training"}),
+]
+
+# Action detection patterns
+_QUERY_PATTERNS = re.compile(
+    r'^(what|when|where|which|who|how|show|list|get|display|retrieve|tell me|do |does |did |has |have |is |are |was |were )',
+    re.IGNORECASE,
+)
+_EXECUTE_PATTERNS = re.compile(
+    r'^(add|create|save|log|record|schedule|set|run|send|generate|delete|remove|update|rate|ingest)',
+    re.IGNORECASE,
+)
+
+
+def _rule_based_classify(message: str) -> dict | None:
+    """Fast rule-based classification. Returns None if no rule matches."""
+    msg = message.strip().lower()
+
+    for pattern, result in _RULE_PATTERNS:
+        if re.search(pattern, msg, re.IGNORECASE):
+            classification = {
+                "action": result.get("action", "query"),
+                "skill": result["skill"],
+                "role": result.get("role", "cybersecurity_executive"),
+                "domain": result.get("domain", "professional"),
+            }
+            # Refine action if not already set
+            if "action" not in result:
+                if _EXECUTE_PATTERNS.search(message):
+                    classification["action"] = "execute"
+                elif _QUERY_PATTERNS.search(message):
+                    classification["action"] = "query"
+                elif message.strip().endswith("?"):
+                    classification["action"] = "query"
+            logger.info("rule_based_classification", extra=classification)
+            return classification
+
+    return None
 
 
 def invalidate_classifier_cache() -> None:
@@ -64,11 +143,17 @@ async def classify_chat_intent(
     message: str,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict:
-    """Classify a chat message into action, skill, role, and domain using qwen3:4b.
+    """Classify a chat message into action, skill, role, and domain.
 
+    Uses fast rule-based matching first, falls back to LLM (qwen3:4b).
     Returns dict with keys: action, skill, role, domain.
-    Falls back to safe defaults on any failure.
     """
+    # ── Try rule-based classification first (instant, no LLM call) ──
+    rule_result = _rule_based_classify(message)
+    if rule_result:
+        return rule_result
+
+    # ── Fall back to LLM classification ──
     try:
         system_prompt = _build_classifier_prompt()
         raw = await generate(

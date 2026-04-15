@@ -9,6 +9,8 @@ const state = {
     conversationId: crypto.randomUUID(),
     history: [],
     sending: false,
+    userId: null,
+    userName: '',
 };
 
 // ── DOM refs ──
@@ -28,12 +30,81 @@ const medicalOpts = document.getElementById('medical-options');
 const recipesOpts = document.getElementById('recipes-options');
 const calendarOpts = document.getElementById('calendar-options');
 const skillsOpts = document.getElementById('skills-options');
+const workoutOpts = document.getElementById('workout-options');
 const timeFilter = document.getElementById('time-filter');
 const autoIngest = document.getElementById('auto-ingest');
 const strategySelect = document.getElementById('strategy-select');
 
+// ── Login ──
+async function showLoginScreen() {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app').classList.add('hidden');
+
+    const usersDiv = document.getElementById('existing-users');
+    usersDiv.innerHTML = '';
+
+    try {
+        const resp = await fetch(`${API}/auth/users`);
+        const data = await resp.json();
+        for (const u of (data.users || [])) {
+            const btn = document.createElement('button');
+            btn.className = 'user-btn';
+            btn.textContent = u.first_name;
+            btn.addEventListener('click', () => loginAs(u.first_name));
+            usersDiv.appendChild(btn);
+        }
+    } catch (e) {
+        console.error('Failed to load users', e);
+    }
+
+    const loginInput = document.getElementById('login-name');
+    const loginBtn = document.getElementById('login-btn');
+    loginBtn.onclick = () => { if (loginInput.value.trim()) loginAs(loginInput.value.trim()); };
+    loginInput.onkeydown = (e) => { if (e.key === 'Enter' && loginInput.value.trim()) loginAs(loginInput.value.trim()); };
+    loginInput.focus();
+}
+
+async function loginAs(name) {
+    try {
+        const resp = await fetch(`${API}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        const data = await resp.json();
+        if (data.id) {
+            state.userId = data.id;
+            state.userName = data.first_name;
+            localStorage.setItem('pai_user_id', data.id);
+            localStorage.setItem('pai_user_name', data.first_name);
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            document.getElementById('user-name-display').textContent = data.first_name;
+            await initApp();
+        }
+    } catch (e) {
+        console.error('Login failed', e);
+    }
+}
+
 // ── Init ──
 async function init() {
+    // Check for stored login
+    const storedId = localStorage.getItem('pai_user_id');
+    const storedName = localStorage.getItem('pai_user_name');
+    if (storedId && storedName) {
+        state.userId = parseInt(storedId);
+        state.userName = storedName;
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+        document.getElementById('user-name-display').textContent = storedName;
+        await initApp();
+    } else {
+        await showLoginScreen();
+    }
+}
+
+async function initApp() {
     await loadRoles();
     checkHealth();
     setInterval(checkHealth, 30000);
@@ -65,6 +136,7 @@ async function init() {
             recipesOpts.classList.toggle('hidden', state.mode !== 'recipes');
             calendarOpts.classList.toggle('hidden', state.mode !== 'calendar');
             skillsOpts.classList.toggle('hidden', state.mode !== 'skills');
+            workoutOpts.classList.toggle('hidden', state.mode !== 'workout');
 
             if (state.mode === 'skills') { loadSkillsInventory(); }
 
@@ -79,6 +151,7 @@ async function init() {
                 medical: 'Tell PAI about a medical event (e.g. "Tim had a dental cleaning today")...',
                 recipes: 'Paste a full recipe (with Ingredients + Instructions headings) or type "search chicken"...',
                 calendar: 'Tell PAI about an event (e.g. "Emma\'s birthday is June 15")...',
+                workout: 'Define a workout (e.g. "peloton M-W-F 30 min") or log activity (e.g. "sauna 20 minutes")...',
                 skills: 'Skills mode — click a skill or use "Refresh Skills" to see the inventory',
             };
             inputEl.placeholder = placeholders[state.mode] || 'Type a message...';
@@ -120,9 +193,19 @@ async function init() {
     // Skills mode buttons
     document.getElementById('skills-load-btn').addEventListener('click', loadSkillsInventory);
 
-    addSystemMessage('Welcome to PAI. Your roles and agents are auto-selected from your prompt. Override with the dropdowns if needed.');
+    // Workout mode buttons
+    document.getElementById('workout-today-btn').addEventListener('click', loadTodayWorkout);
+    document.getElementById('workout-programs-btn').addEventListener('click', loadWorkoutPrograms);
+    document.getElementById('workout-logs-btn').addEventListener('click', loadWorkoutLogs);
 
-    // Try to reload last conversation from server
+    // Conversation management
+    document.getElementById('new-chat-btn').addEventListener('click', startNewChat);
+    document.getElementById('logout-btn').addEventListener('click', logout);
+
+    addSystemMessage(`Welcome back, ${state.userName}. Your roles and agents are auto-selected from your prompt.`);
+
+    // Load conversations list and restore last conversation
+    await loadConversationList();
     await loadConversationHistory();
 }
 
@@ -205,6 +288,9 @@ async function handleSend() {
             case 'calendar':
                 data = await handleCalendarInput(text);
                 break;
+            case 'workout':
+                data = await handleWorkoutInput(text);
+                break;
         }
         loadingEl.remove();
 
@@ -225,6 +311,8 @@ async function handleSend() {
                     state.history.push({ role_name: 'assistant', content: data.content });
                     // Keep last 20
                     if (state.history.length > 20) state.history = state.history.slice(-20);
+                    // Refresh conversation list (first message creates the conversation)
+                    loadConversationList();
                 }
             }
         }
@@ -244,6 +332,7 @@ async function sendChat(message) {
         message,
         conversation_id: state.conversationId,
         history: state.history,
+        user_id: state.userId,
     };
     if (state.role) body.role = state.role;
     if (state.secondaryRole) body.secondary_role = state.secondaryRole;
@@ -410,6 +499,7 @@ function clearChat() {
     state.history = [];
     state.conversationId = crypto.randomUUID();
     addSystemMessage('Chat cleared. Starting fresh conversation.');
+    loadConversationList();
 }
 
 async function loadConversationHistory() {
@@ -424,6 +514,228 @@ async function loadConversationHistory() {
         }
     } catch (e) {
         // No history to load — that's fine
+    }
+}
+
+// ── Conversation Management ──
+
+async function loadConversationList() {
+    if (!state.userId) return;
+    const listEl = document.getElementById('conversation-list');
+    try {
+        const resp = await fetch(`${API}/conversations?user_id=${state.userId}&limit=20`);
+        const data = await resp.json();
+        listEl.innerHTML = '';
+        for (const c of (data.conversations || [])) {
+            if (c.turn_count === 0) continue;
+            const item = document.createElement('button');
+            item.className = 'convo-item' + (c.id === state.conversationId ? ' active' : '');
+            const title = escapeHtml(c.title || 'New chat');
+            item.innerHTML = `
+                <span class="convo-title">${title}</span>
+                <span class="convo-count">${c.turn_count}</span>
+                <span class="convo-delete" data-id="${c.id}" title="Delete">&times;</span>
+            `;
+            item.addEventListener('click', (e) => {
+                if (e.target.classList.contains('convo-delete')) return;
+                switchConversation(c.id);
+            });
+            const delBtn = item.querySelector('.convo-delete');
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm('Delete this conversation?')) return;
+                await fetch(`${API}/conversations/${c.id}`, { method: 'DELETE' });
+                if (c.id === state.conversationId) startNewChat();
+                else loadConversationList();
+            });
+            listEl.appendChild(item);
+        }
+    } catch (e) {
+        console.error('Failed to load conversations', e);
+    }
+}
+
+async function switchConversation(conversationId) {
+    messagesEl.innerHTML = '';
+    state.history = [];
+    state.conversationId = conversationId;
+    await loadConversationHistory();
+    loadConversationList();
+}
+
+function startNewChat() {
+    messagesEl.innerHTML = '';
+    state.history = [];
+    state.conversationId = crypto.randomUUID();
+    addSystemMessage(`New conversation started.`);
+    loadConversationList();
+}
+
+function logout() {
+    localStorage.removeItem('pai_user_id');
+    localStorage.removeItem('pai_user_name');
+    state.userId = null;
+    state.userName = '';
+    state.history = [];
+    state.conversationId = crypto.randomUUID();
+    messagesEl.innerHTML = '';
+    document.getElementById('app').classList.add('hidden');
+    showLoginScreen();
+}
+
+// ── Workout Mode ──
+
+async function handleWorkoutInput(text) {
+    const resp = await fetch(`${API}/skills/workout/tell`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    renderActionResult(data, 'workout');
+    return null;
+}
+
+async function loadTodayWorkout() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/workout/today`);
+        const data = await resp.json();
+        loadingEl.remove();
+
+        const div = document.createElement('div');
+        div.className = 'message ai';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.innerHTML = `<span class="role-tag">workout</span> ${data.day}`;
+        div.appendChild(metaEl);
+
+        if (data.scheduled?.length) {
+            const h = document.createElement('h4');
+            h.style.cssText = 'color:var(--accent);margin:8px 0 4px;font-size:13px;';
+            h.textContent = 'Scheduled';
+            div.appendChild(h);
+            for (const s of data.scheduled) {
+                const p = document.createElement('div');
+                p.style.cssText = 'padding:3px 0;font-size:13px;';
+                p.textContent = `\u{1F3CB} ${s.activity} — ${s.duration_minutes} min`;
+                if (s.notes) {
+                    const n = document.createElement('div');
+                    n.style.cssText = 'padding-left:20px;font-size:12px;color:var(--text-secondary);white-space:pre-line;';
+                    n.textContent = s.notes;
+                    div.appendChild(p);
+                    div.appendChild(n);
+                } else {
+                    div.appendChild(p);
+                }
+            }
+        } else {
+            const p = document.createElement('p');
+            p.style.color = 'var(--text-secondary)';
+            p.textContent = 'Rest day — no scheduled workouts';
+            div.appendChild(p);
+        }
+
+        if (data.completed?.length) {
+            const h = document.createElement('h4');
+            h.style.cssText = 'color:var(--success);margin:12px 0 4px;font-size:13px;';
+            h.textContent = 'Completed Today';
+            div.appendChild(h);
+            for (const c of data.completed) {
+                const p = document.createElement('div');
+                p.style.cssText = 'padding:3px 0;font-size:13px;color:var(--success);';
+                p.textContent = `\u2713 ${c.activity} — ${c.duration_minutes} min`;
+                div.appendChild(p);
+            }
+        }
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function loadWorkoutPrograms() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/workout/programs`);
+        const data = await resp.json();
+        loadingEl.remove();
+
+        const programs = data.programs || [];
+        const div = document.createElement('div');
+        div.className = 'message ai';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.innerHTML = `<span class="role-tag">workout</span> ${programs.length} program${programs.length !== 1 ? 's' : ''}`;
+        div.appendChild(metaEl);
+
+        if (!programs.length) {
+            div.appendChild(Object.assign(document.createElement('p'), {
+                textContent: 'No workout programs yet. Use the input to define schedules (e.g. "peloton M-W-F 30 min").',
+            }));
+        } else {
+            for (const p of programs) {
+                const card = document.createElement('div');
+                card.className = 'research-card';
+                card.innerHTML = `
+                    <div class="rc-title">${escapeHtml(p.name)}</div>
+                    <div class="rc-snippet">${escapeHtml(p.activity)} — ${p.days_display} (${p.duration_minutes} min)</div>
+                    ${p.notes ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;white-space:pre-line">${escapeHtml(p.notes)}</div>` : ''}
+                `;
+                div.appendChild(card);
+            }
+        }
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function loadWorkoutLogs() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/workout/logs?days_back=14`);
+        const data = await resp.json();
+        loadingEl.remove();
+
+        const logs = data.logs || [];
+        const div = document.createElement('div');
+        div.className = 'message ai';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.innerHTML = `<span class="role-tag">workout</span> ${logs.length} activities (last 14 days)`;
+        div.appendChild(metaEl);
+
+        if (!logs.length) {
+            div.appendChild(Object.assign(document.createElement('p'), {
+                textContent: 'No workout activity logged recently.',
+            }));
+        } else {
+            for (const l of logs) {
+                const card = document.createElement('div');
+                card.className = 'research-card';
+                card.innerHTML = `
+                    <span class="rc-score">${l.duration_minutes}m</span>
+                    <div class="rc-title">${escapeHtml(l.activity)}</div>
+                    <div class="rc-url">${escapeHtml(l.log_date)}</div>
+                    ${l.notes ? `<div class="rc-snippet">${escapeHtml(l.notes)}</div>` : ''}
+                `;
+                div.appendChild(card);
+            }
+        }
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
     }
 }
 

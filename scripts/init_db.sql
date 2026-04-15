@@ -3,6 +3,31 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- ── Users (simple first-name login) ────────────────────────────
+
+CREATE TABLE IF NOT EXISTS pai_users (
+    id SERIAL PRIMARY KEY,
+    first_name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_login_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pai_users_name_lower
+    ON pai_users (LOWER(first_name));
+
+-- ── Conversations (persistent chat sessions per user) ──────────
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES pai_users(id) ON DELETE CASCADE,
+    title VARCHAR(500) DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_user
+    ON conversations (user_id, updated_at DESC);
+
 -- Episodic Memory: interactions, tasks, outputs
 CREATE TABLE IF NOT EXISTS episodic_memory (
     id SERIAL PRIMARY KEY,
