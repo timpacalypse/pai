@@ -2,9 +2,20 @@
 
 const API = '/api';  // proxied through nginx to orchestrator:8000
 
+// UUID generator — fallback for insecure contexts (plain HTTP)
+function genUUID() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        try { return crypto.randomUUID(); } catch (e) { /* fallback below */ }
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+}
+
 const state = {
     mode: 'chat',
-    conversationId: crypto.randomUUID(),
+    conversationId: genUUID(),
     history: [],
     sending: false,
     userId: null,
@@ -493,7 +504,7 @@ function escapeHtml(str) {
 function clearChat() {
     messagesEl.innerHTML = '';
     state.history = [];
-    state.conversationId = crypto.randomUUID();
+    state.conversationId = genUUID();
     addSystemMessage('Chat cleared. Starting fresh conversation.');
     loadConversationList();
 }
@@ -562,7 +573,7 @@ async function switchConversation(conversationId) {
 function startNewChat() {
     messagesEl.innerHTML = '';
     state.history = [];
-    state.conversationId = crypto.randomUUID();
+    state.conversationId = genUUID();
     addSystemMessage(`New conversation started.`);
     loadConversationList();
 }
@@ -573,7 +584,7 @@ function logout() {
     state.userId = null;
     state.userName = '';
     state.history = [];
-    state.conversationId = crypto.randomUUID();
+    state.conversationId = genUUID();
     messagesEl.innerHTML = '';
     document.getElementById('app').classList.add('hidden');
     showLoginScreen();
