@@ -269,8 +269,8 @@ async def process_workout_input(user_text: str, http_client=None) -> dict:
             continue
         name = prog.get("name", prog.get("activity", "Workout"))
         activity = prog.get("activity", name)
-        duration = int(prog.get("duration_minutes", 30))
-        notes = prog.get("notes", "")
+        duration = int(prog.get("duration_minutes") or 30)
+        notes = prog.get("notes", "") or ""
 
         record = await add_program(
             name=name, activity=activity,
@@ -286,8 +286,8 @@ async def process_workout_input(user_text: str, http_client=None) -> dict:
         activity = log.get("activity", "")
         if not activity:
             continue
-        duration = int(log.get("duration_minutes", 0))
-        notes = log.get("notes", "")
+        duration = int(log.get("duration_minutes") or 0)
+        notes = log.get("notes", "") or ""
         metrics = log.get("metrics", {})
 
         record = await log_activity(
