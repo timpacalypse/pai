@@ -593,7 +593,12 @@ async function handleWorkoutInput(text) {
     });
     if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
     const data = await resp.json();
-    renderActionResult(data, 'workout');
+    if (data.context) {
+        // Query response — display workout context
+        addMessage(data.context, 'ai', 'workout');
+    } else {
+        renderActionResult(data, 'workout');
+    }
     return null;
 }
 

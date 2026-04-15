@@ -2,7 +2,8 @@
 
 import json
 import logging
-from datetime import date, datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import text
 
@@ -222,9 +223,25 @@ async def deactivate_program(program_id: int) -> bool:
 
 # ── NL Processing ────────────────────────────────────────────
 
+_QUERY_RE = re.compile(
+    r"\b(what|when|show|list|tell me|get|view|check|schedule|today|tomorrow|upcoming)\b",
+    re.IGNORECASE,
+)
+
 
 async def process_workout_input(user_text: str, http_client=None) -> dict:
     """Parse natural language workout input and store programs/logs."""
+    # Detect if this is a query rather than a definition/log
+    if _QUERY_RE.search(user_text):
+        context = await build_workout_context(user_text)
+        return {
+            "intent": "query",
+            "programs": [],
+            "logs": [],
+            "actions": [],
+            "context": context,
+        }
+
     today = datetime.now(timezone.utc)
     prompt_text = WORKOUT_INTAKE_PROMPT.format(
         today=today.strftime("%Y-%m-%d"),
@@ -306,10 +323,18 @@ async def build_workout_context(query: str = "") -> str:
     # Detect if user is asking about a specific day
     target_dow = None
     query_lower = query.lower() if query else ""
-    for name, dow in DAY_ABBREV.items():
-        if len(name) >= 3 and name in query_lower:
-            target_dow = dow
-            break
+    now = datetime.now(timezone.utc)
+    if "tomorrow" in query_lower:
+        target_dow = (now.weekday() + 1) % 7
+    elif "today" in query_lower:
+        target_dow = now.weekday()
+    elif "yesterday" in query_lower:
+        target_dow = (now.weekday() - 1) % 7
+    else:
+        for name, dow in DAY_ABBREV.items():
+            if len(name) >= 3 and name in query_lower:
+                target_dow = dow
+                break
 
     lines = []
 
