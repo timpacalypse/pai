@@ -61,12 +61,16 @@ async function showLoginScreen() {
 }
 
 async function loginAs(name) {
+    const loginBtn = document.getElementById('login-btn');
+    loginBtn.textContent = 'Signing in...';
+    loginBtn.disabled = true;
     try {
         const resp = await fetch(`${API}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name }),
         });
+        if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
         const data = await resp.json();
         if (data.id) {
             state.userId = data.id;
@@ -77,9 +81,18 @@ async function loginAs(name) {
             document.getElementById('app').classList.remove('hidden');
             document.getElementById('user-name-display').textContent = data.first_name;
             await initApp();
+        } else {
+            throw new Error('No user ID returned');
         }
     } catch (e) {
         console.error('Login failed', e);
+        loginBtn.textContent = 'Sign In';
+        loginBtn.disabled = false;
+        const errEl = document.getElementById('login-error');
+        if (errEl) {
+            errEl.textContent = `Login failed: ${e.message}`;
+            errEl.style.display = 'block';
+        }
     }
 }
 

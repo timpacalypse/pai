@@ -22,7 +22,9 @@
     --mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
 }
 
-html, body { height: 100%; font-family: var(--font); background: var(--bg-dark); color: var(--text-primary); }
+html, body { height: 100%; font-family: var(--font); background: var(--bg-dark); color: var(--text-primary); -webkit-text-size-adjust: 100%; }
+
+button, input, select, textarea { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
 /* ── Login Screen ── */
 #login-screen {
@@ -65,11 +67,14 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg-dark);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
-    padding: 12px 20px;
+    padding: 14px 20px;
     font-size: 16px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    width: 100%;
 }
 .user-btn:hover { border-color: var(--accent); background: rgba(79, 142, 247, 0.1); }
 .login-new {
@@ -79,12 +84,12 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg-dark);
 }
 .login-new input {
     flex: 1;
-    padding: 10px 14px;
+    padding: 12px 14px;
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: 16px;
     outline: none;
 }
 .login-new input:focus { border-color: var(--accent); }
@@ -93,12 +98,15 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg-dark);
     border: none;
     border-radius: var(--radius);
     color: #fff;
-    padding: 10px 20px;
-    font-size: 14px;
+    padding: 12px 24px;
+    font-size: 16px;
     font-weight: 600;
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 #login-btn:hover { background: var(--accent-hover); }
+#login-btn:disabled { opacity: 0.6; }
 
 /* ── User Info Header ── */
 .user-info {
