@@ -7,8 +7,36 @@ from app.core.database import async_session
 
 logger = logging.getLogger("pai.services.conversation")
 
+_TITLE_SYSTEM = (
+    "Generate a concise 3-6 word title summarizing this conversation. "
+    "No quotes, no punctuation at the end, no prefixes like 'Title:'. "
+    "Just the title words."
+)
 
-async def ensure_conversation(conversation_id: UUID, user_id: int, title: str = "") -> None:
+
+async def generate_title(message: str, http_client=None) -> str:
+    """Generate a short conversation title from the first user message."""
+    try:
+        from app.services.ollama_service import generate
+        raw = await generate(
+            prompt=message[:200],
+            system_prompt=_TITLE_SYSTEM,
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        title = raw.strip().strip('"').strip("'").strip()
+        # Remove any <think>...</think> blocks from qwen3
+        import re
+        title = re.sub(r"<think>.*?</think>", "", title, flags=re.DOTALL).strip()
+        if len(title) > 80:
+            title = title[:77] + "..."
+        return title or message[:60]
+    except Exception as e:
+        logger.warning("title_generation_failed: %s", e)
+        return message[:60]
+
+
+async def ensure_conversation(conversation_id: UUID, user_id: int, title: str = "", http_client=None) -> None:
     """Create a conversation record if it doesn't exist."""
     async with async_session() as session:
         result = await session.execute(
@@ -21,12 +49,14 @@ async def ensure_conversation(conversation_id: UUID, user_id: int, title: str = 
                 {"cid": str(conversation_id)},
             )
         else:
+            # Generate a short title from the first message
+            generated_title = await generate_title(title, http_client=http_client)
             await session.execute(
                 text(
                     "INSERT INTO conversations (id, user_id, title) "
                     "VALUES (CAST(:cid AS UUID), :uid, :title)"
                 ),
-                {"cid": str(conversation_id), "uid": user_id, "title": title},
+                {"cid": str(conversation_id), "uid": user_id, "title": generated_title},
             )
         await session.commit()
 

@@ -4,8 +4,6 @@ const API = '/api';  // proxied through nginx to orchestrator:8000
 
 const state = {
     mode: 'chat',
-    role: '',
-    secondaryRole: '',
     conversationId: crypto.randomUUID(),
     history: [],
     sending: false,
@@ -17,8 +15,6 @@ const state = {
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
-const roleSelect = document.getElementById('role-select');
-const secondarySelect = document.getElementById('secondary-select');
 const clearBtn = document.getElementById('clear-btn');
 const healthDot = document.querySelector('.health-dot');
 const healthText = document.getElementById('health-text');
@@ -105,9 +101,21 @@ async function init() {
 }
 
 async function initApp() {
-    await loadRoles();
     checkHealth();
     setInterval(checkHealth, 30000);
+
+    // Sidebar toggle for mobile
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const sidebarOverlay = document.getElementById('sidebar-overlay');
+    const sidebar = document.getElementById('sidebar');
+    sidebarToggle.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+        sidebarOverlay.classList.toggle('open');
+    });
+    sidebarOverlay.addEventListener('click', () => {
+        sidebar.classList.remove('open');
+        sidebarOverlay.classList.remove('open');
+    });
 
     // Event listeners
     sendBtn.addEventListener('click', handleSend);
@@ -118,8 +126,6 @@ async function initApp() {
         }
     });
     clearBtn.addEventListener('click', clearChat);
-    roleSelect.addEventListener('change', () => { state.role = roleSelect.value; });
-    secondarySelect.addEventListener('change', () => { state.secondaryRole = secondarySelect.value; });
 
     // Mode buttons
     document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -155,6 +161,12 @@ async function initApp() {
                 skills: 'Skills mode — click a skill or use "Refresh Skills" to see the inventory',
             };
             inputEl.placeholder = placeholders[state.mode] || 'Type a message...';
+
+            // Close sidebar on mobile after mode selection
+            if (window.innerWidth <= 768) {
+                document.getElementById('sidebar').classList.remove('open');
+                document.getElementById('sidebar-overlay').classList.remove('open');
+            }
         });
     });
 
@@ -202,35 +214,11 @@ async function initApp() {
     document.getElementById('new-chat-btn').addEventListener('click', startNewChat);
     document.getElementById('logout-btn').addEventListener('click', logout);
 
-    addSystemMessage(`Welcome back, ${state.userName}. Your roles and agents are auto-selected from your prompt.`);
+    addSystemMessage(`Welcome back, ${state.userName}.`);
 
     // Load conversations list and restore last conversation
     await loadConversationList();
     await loadConversationHistory();
-}
-
-// ── Load roles into dropdowns ──
-async function loadRoles() {
-    try {
-        const resp = await fetch(`${API}/roles`);
-        const data = await resp.json();
-        for (const [domain, roles] of Object.entries(data.domains)) {
-            const group = document.createElement('optgroup');
-            group.label = domain.replace('_', ' ').toUpperCase();
-            const group2 = group.cloneNode(true);
-
-            for (const r of roles) {
-                const opt = new Option(r.role.replace(/_/g, ' '), r.role);
-                opt.title = r.description;
-                group.appendChild(opt);
-                group2.appendChild(opt.cloneNode(true));
-            }
-            roleSelect.appendChild(group);
-            secondarySelect.appendChild(group2);
-        }
-    } catch (e) {
-        console.error('Failed to load roles', e);
-    }
 }
 
 // ── Health check ──
@@ -334,8 +322,6 @@ async function sendChat(message) {
         history: state.history,
         user_id: state.userId,
     };
-    if (state.role) body.role = state.role;
-    if (state.secondaryRole) body.secondary_role = state.secondaryRole;
 
     const resp = await fetch(`${API}/chat`, {
         method: 'POST',
@@ -348,8 +334,6 @@ async function sendChat(message) {
 
 async function sendTask(input) {
     const body = { input };
-    if (state.role) body.role = state.role;
-    if (state.secondaryRole) body.secondary_role = state.secondaryRole;
 
     const resp = await fetch(`${API}/task`, {
         method: 'POST',
@@ -367,7 +351,6 @@ async function sendResearch(topic) {
         time_filter: timeFilter.value,
         auto_ingest: autoIngest.checked,
     };
-    if (state.role) body.role = state.role;
 
     const resp = await fetch(`${API}/skills/web-research`, {
         method: 'POST',

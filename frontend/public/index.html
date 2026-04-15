@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PAI — Personal AI</title>
-    <link rel="stylesheet" href="styles.css?v=20260415">
+    <link rel="stylesheet" href="styles.css?v=20260416">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0f1117">
 </head>
 <body>
     <!-- Login Screen -->
@@ -22,6 +25,10 @@
 
     <!-- App (hidden until login) -->
     <div id="app" class="hidden">
+        <!-- Mobile sidebar toggle -->
+        <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Menu">&#9776;</button>
+        <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
         <!-- Sidebar -->
         <aside id="sidebar">
             <div class="sidebar-header">
@@ -37,20 +44,6 @@
                 <label>Conversations</label>
                 <button id="new-chat-btn" class="secondary-btn" style="width:100%;margin-bottom:6px">+ New Chat</button>
                 <div id="conversation-list" class="conversation-list"></div>
-            </div>
-
-            <div class="sidebar-section">
-                <label for="role-select">Primary Role</label>
-                <select id="role-select">
-                    <option value="">Auto (inferred from prompt)</option>
-                </select>
-            </div>
-
-            <div class="sidebar-section">
-                <label for="secondary-select">Secondary Role</label>
-                <select id="secondary-select">
-                    <option value="">Auto (inferred from prompt)</option>
-                </select>
             </div>
 
             <div class="sidebar-section">
@@ -170,6 +163,6 @@
         </main>
     </div>
 
-    <script src="app.js?v=20260415"></script>
+    <script src="app.js?v=20260416"></script>
 </body>
 </html>

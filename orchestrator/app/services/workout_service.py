@@ -40,7 +40,7 @@ Respond ONLY with valid JSON matching this schema (no other text):
       "activity": "the exercise/activity type (e.g. peloton, chest workout, plyometrics, yoga, running, sauna, cold plunge)",
       "days": ["mon", "wed", "fri"],
       "duration_minutes": 30,
-      "notes": "any extra details"
+      "notes": "IMPORTANT: preserve ALL exercise details, sets, reps, and instructions VERBATIM from user input. Do NOT summarize."
     }}
   ],
   "logs": [
@@ -62,6 +62,7 @@ Rules:
 - If user says "sauna 20 minutes cold plunge 5" those are two separate logs.
 - Either "programs" or "logs" can be empty arrays.
 - Duration defaults to 30 if not specified for programs, but must be explicit for logs.
+- CRITICAL: The "notes" field must contain ALL exercise details, sets, reps, rest periods, and instructions EXACTLY as the user wrote them. Never summarize or condense — copy the full text verbatim.
 """
 
 

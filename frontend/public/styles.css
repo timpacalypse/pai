@@ -171,6 +171,35 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg-dark);
 .convo-item:hover .convo-delete { opacity: 1; }
 .convo-delete:hover { color: var(--error); }
 
+/* ── Sidebar Toggle (mobile) ── */
+.sidebar-toggle {
+    display: none;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 1001;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 22px;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+}
+.sidebar-overlay.open { display: block; }
+
 #app {
     display: flex;
     height: 100vh;
@@ -617,10 +646,67 @@ select:focus, input[type="text"]:focus {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* Responsive */
+/* ── Responsive / Mobile ── */
 @media (max-width: 768px) {
-    #sidebar { width: 220px; min-width: 220px; padding: 14px; }
-    .message { max-width: 90%; }
+    .sidebar-toggle { display: flex; }
+
+    #sidebar {
+        position: fixed;
+        top: 0;
+        left: -300px;
+        width: 280px;
+        min-width: 280px;
+        height: 100vh;
+        z-index: 1000;
+        transition: left 0.25s ease;
+        padding-top: 60px;
+    }
+    #sidebar.open { left: 0; }
+
+    #main { width: 100%; }
+
+    #messages { padding: 16px 12px; }
+
+    #input-area { padding: 10px 12px; }
+
+    #user-input {
+        font-size: 16px; /* prevents iOS zoom on focus */
+        padding: 10px 12px;
+    }
+
+    .message {
+        max-width: 92%;
+        padding: 12px 14px;
+        font-size: 14px;
+    }
+
+    .mode-buttons {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .login-box {
+        min-width: unset;
+        width: 90vw;
+        max-width: 360px;
+        padding: 30px 24px;
+    }
+
+    .login-box h1 { font-size: 36px; }
+
+    .research-card { padding: 10px; }
+    .recipe-header { padding: 10px; }
+
+    .meal-table { font-size: 12px; }
+    .meal-table th, .meal-table td { padding: 5px 6px; }
+}
+
+/* Small phones */
+@media (max-width: 400px) {
+    .mode-buttons { grid-template-columns: 1fr 1fr; gap: 4px; }
+    .mode-btn { padding: 6px; font-size: 11px; }
+    #sidebar { padding: 60px 14px 14px; gap: 12px; }
+    .sidebar-section label { font-size: 10px; }
+    .message { max-width: 96%; padding: 10px 12px; font-size: 13px; }
 }
 
 /* ── Meal Plan Table ── */

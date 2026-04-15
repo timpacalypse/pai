@@ -321,7 +321,7 @@ async def chat(req: ChatRequest, request: Request):
             try:
                 if action == "execute" and skill.write_handler:
                     content = await skill.write_handler(req.message, http_client)
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
                 elif action == "query" and skill.read_handler:
                     # Inject skill data as context for the LLM to interpret
                     skill_data = await skill.read_handler(req.message, http_client)
@@ -329,7 +329,7 @@ async def chat(req: ChatRequest, request: Request):
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
                     )
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
                 elif skill.read_handler:
                     # Action ambiguous — default to reading with context
                     skill_data = await skill.read_handler(req.message, http_client)
@@ -337,14 +337,14 @@ async def chat(req: ChatRequest, request: Request):
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
                     )
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
             except Exception as e:
                 logger.warning(f"Skill {skill_id} failed: {e}")
                 # Fall through to conversation
 
     # ── Step 3: Conversation — build context and generate response ──
     content = await _generate_with_context(req, roles, http_client)
-    return _build_chat_response(req, roles, content, "conversation", start)
+    return _build_chat_response(req, roles, content, "conversation", start, http_client)
 
 
 async def _generate_with_context(
@@ -394,7 +394,7 @@ async def _generate_with_context(
     )
 
 
-def _build_chat_response(req, roles, content: str, intent: str, start: float) -> ChatResponse:
+def _build_chat_response(req, roles, content: str, intent: str, start: float, http_client=None) -> ChatResponse:
     """Build a ChatResponse and log the turn to episodic memory."""
     import asyncio
     duration_ms = (time.perf_counter() - start) * 1000
@@ -413,7 +413,7 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float) ->
         # Persist conversation record if user_id provided
         if getattr(req, "user_id", None):
             from app.services.conversation_service import ensure_conversation
-            await ensure_conversation(req.conversation_id, req.user_id, title=req.message[:60])
+            await ensure_conversation(req.conversation_id, req.user_id, title=req.message[:200], http_client=http_client)
     asyncio.create_task(_log())
 
     return ChatResponse(
