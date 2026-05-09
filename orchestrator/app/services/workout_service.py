@@ -224,16 +224,22 @@ async def deactivate_program(program_id: int) -> bool:
 
 # ── NL Processing ────────────────────────────────────────────
 
-_QUERY_RE = re.compile(
-    r"\b(what|when|show|list|tell me|get|view|check|schedule|today|tomorrow|upcoming)\b",
-    re.IGNORECASE,
-)
+
+async def _is_workout_query(user_text: str, http_client=None) -> bool:
+    """Use LLM to determine if the message is a query vs a workout definition/log."""
+    raw = await generate(
+        prompt=f"Is this a question/query about workouts, or is the user defining/logging a workout? Return ONLY 'query' or 'command'.\n\nMessage: {user_text}",
+        system_prompt="Classify workout messages. 'query' = asking about schedule, viewing workouts, checking what's planned. 'command' = defining a new program, logging an activity, recording exercise. Return only one word.",
+        model="qwen3:4b",
+        http_client=http_client,
+    )
+    return "query" in raw.strip().lower()
 
 
 async def process_workout_input(user_text: str, http_client=None) -> dict:
     """Parse natural language workout input and store programs/logs."""
     # Detect if this is a query rather than a definition/log
-    if _QUERY_RE.search(user_text):
+    if await _is_workout_query(user_text, http_client):
         context = await build_workout_context(user_text)
         return {
             "intent": "query",

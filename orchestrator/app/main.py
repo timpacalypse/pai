@@ -17,6 +17,7 @@ from app.services.scheduler import scheduler_loop
 from app.services.home_alert_scheduler import home_alert_scheduler_loop
 from app.services.briefing_scheduler import briefing_scheduler_loop
 from app.services.autonomous_scheduler import autonomous_scheduler_loop
+from app.services.fitness.fitness_scheduler import fitness_sync_loop
 
 # ── Structured logging ──
 logging.basicConfig(
@@ -62,10 +63,13 @@ async def lifespan(app: FastAPI):
     autonomous_task = asyncio.create_task(autonomous_scheduler_loop())
     app.state.autonomous_task = autonomous_task
 
+    fitness_task = asyncio.create_task(fitness_sync_loop())
+    app.state.fitness_task = fitness_task
+
     yield
 
     # Shutdown
-    for task in (scheduler_task, home_alert_task, briefing_task, autonomous_task):
+    for task in (scheduler_task, home_alert_task, briefing_task, autonomous_task, fitness_task):
         task.cancel()
         try:
             await task

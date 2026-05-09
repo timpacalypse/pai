@@ -498,13 +498,18 @@ def register_all_skills():
 
     async def _article_curation_write(message, http_client=None):
         from app.services.article_curation_service import curate_articles_text
-        # Parse custom topics from message if present
+        from app.services.ollama_service import generate as llm_generate
+        # Use LLM to extract custom topic from message
         topics = None
-        lower = message.lower()
-        if "about " in lower:
-            custom_topic = message.split("about ", 1)[1].strip()
-            if custom_topic:
-                topics = [custom_topic]
+        raw_topic = await llm_generate(
+            prompt=f"Extract the topic the user wants articles about. Return ONLY the topic phrase. If no specific topic, return 'general'.\n\nUser message: {message}",
+            system_prompt="Extract topics. Return only the short topic phrase. No explanation.",
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        topic = raw_topic.strip().strip('"').strip("'")
+        if topic.lower() not in ("general", "none", "n/a", ""):
+            topics = [topic]
         return await curate_articles_text(topics=topics)
 
     register_skill(Skill(
@@ -560,6 +565,209 @@ def register_all_skills():
         read_handler=_workout_read,
         write_handler=_workout_write,
         category="family",
+    ))
+
+    # ── Grocery List ──
+    async def _grocery_read(message, http_client=None):
+        from app.services.content_service import generate_grocery_list, format_grocery_text
+        result = await generate_grocery_list(http_client=http_client)
+        return format_grocery_text(result)
+
+    register_skill(Skill(
+        id="grocery",
+        name="Grocery List",
+        description="Generate a consolidated grocery list from this week's meal plan and saved recipes",
+        examples=["make a grocery list", "what do I need from the store", "grocery list for this week", "shopping list"],
+        read_handler=_grocery_read,
+        write_handler=_grocery_read,
+        category="family",
+    ))
+
+    # ── LinkedIn Post Draft ──
+    async def _linkedin_read(message, http_client=None):
+        from app.services.content_service import draft_linkedin_post, format_linkedin_text
+        from app.services.ollama_service import generate as llm_generate
+        # Use light LLM to extract the desired topic from the user's message
+        raw_topic = await llm_generate(
+            prompt=f"Extract the topic the user wants a LinkedIn post about. Return ONLY the topic phrase, nothing else. If no specific topic, return 'general'.\n\nUser message: {message}",
+            system_prompt="Extract topics. Return only the short topic phrase. No explanation.",
+            model="qwen3:4b",
+            http_client=http_client,
+        )
+        topic = raw_topic.strip().strip('"').strip("'")
+        if topic.lower() in ("general", "none", "n/a", ""):
+            topic = ""
+        result = await draft_linkedin_post(topic=topic, http_client=http_client)
+        return format_linkedin_text(result)
+
+    register_skill(Skill(
+        id="linkedin",
+        name="LinkedIn Post Drafting",
+        description="Draft a thought leadership LinkedIn post from top-scored cybersecurity/AI articles this week",
+        examples=["draft a LinkedIn post", "write a LinkedIn post about AI security", "LinkedIn content", "draft post for LinkedIn"],
+        read_handler=_linkedin_read,
+        write_handler=_linkedin_read,
+        category="professional",
+    ))
+
+    # ── Weekly Security Digest ──
+    async def _digest_read(message, http_client=None):
+        from app.services.content_service import generate_weekly_digest, format_digest_text
+        result = await generate_weekly_digest(http_client=http_client)
+        return format_digest_text(result)
+
+    register_skill(Skill(
+        id="weekly_digest",
+        name="Weekly Security Digest",
+        description="Generate a curated weekly AI + cybersecurity intelligence digest with top developments, trends, and action items",
+        examples=["weekly security digest", "weekly briefing", "security roundup this week", "what happened in cybersecurity this week"],
+        read_handler=_digest_read,
+        write_handler=_digest_read,
+        category="professional",
+    ))
+
+    # ── Tonight's Dinner ──
+    async def _dinner_read(message, http_client=None):
+        from app.services.content_service import get_tonights_dinner, format_dinner_text
+        result = await get_tonights_dinner(http_client=http_client)
+        return format_dinner_text(result)
+
+    register_skill(Skill(
+        id="tonights_dinner",
+        name="Tonight's Dinner",
+        description="Check what's for dinner tonight; shows today's recipe with ingredients and instructions",
+        examples=["what's for dinner", "what's for dinner tonight", "tonight's dinner", "what are we eating tonight"],
+        read_handler=_dinner_read,
+        write_handler=None,
+        category="family",
+    ))
+
+    # ── Fitness platform skills ──
+
+    async def _fitness_summary_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_fitness_summary
+        return await get_fitness_summary(days=7)
+
+    async def _fitness_detailed_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_fitness_summary
+        days = 7
+        lower = message.lower()
+        if "month" in lower or "30" in lower:
+            days = 30
+        elif "2 week" in lower or "14" in lower:
+            days = 14
+        return await get_fitness_summary(days=days)
+
+    async def _fitness_sync_write(message, http_client=None):
+        from app.services.fitness.fitness_query import trigger_sync
+        return await trigger_sync()
+
+    register_skill(Skill(
+        id="fitness_data",
+        name="Fitness Data",
+        description="Query fitness data from Whoop, Peloton, and Tonal — workouts, recovery, sleep, strain, HRV, strength scores. Ask for summaries, trends, or recommendations.",
+        examples=[
+            "how's my recovery looking", "show my fitness data",
+            "whoop recovery trends", "my peloton workouts this week",
+            "tonal strength scores", "how did I sleep this week",
+            "fitness summary", "my HRV trends", "am I overtraining",
+            "what does my recovery say about training today",
+        ],
+        read_handler=_fitness_detailed_read,
+        write_handler=_fitness_sync_write,
+        category="personal",
+    ))
+
+    async def _workout_history_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_workout_details
+        days = 7
+        lower = message.lower()
+        if "month" in lower or "30" in lower:
+            days = 30
+        elif "2 week" in lower or "14" in lower:
+            days = 14
+        platform = ""
+        if "whoop" in lower:
+            platform = "whoop"
+        elif "peloton" in lower:
+            platform = "peloton"
+        return await get_workout_details(days=days, platform=platform)
+
+    register_skill(Skill(
+        id="workout_history",
+        name="Workout History",
+        description="View detailed workout history from Whoop, Peloton, and Tonal — duration, heart rate, calories, strain",
+        examples=[
+            "my workouts this week", "show my peloton rides",
+            "whoop workouts", "what exercises did I do",
+            "workout log", "training history",
+        ],
+        read_handler=_workout_history_read,
+        write_handler=None,
+        category="personal",
+    ))
+
+    async def _recovery_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_recovery_trends
+        days = 14
+        lower = message.lower()
+        if "month" in lower or "30" in lower:
+            days = 30
+        return await get_recovery_trends(days=days)
+
+    register_skill(Skill(
+        id="recovery_data",
+        name="Recovery & HRV",
+        description="View Whoop recovery scores, HRV trends, resting heart rate, SpO2 data",
+        examples=[
+            "recovery score", "HRV trends", "resting heart rate",
+            "am I recovered", "recovery this week", "SpO2 data",
+        ],
+        read_handler=_recovery_read,
+        write_handler=None,
+        category="personal",
+    ))
+
+    async def _sleep_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_sleep_analysis
+        days = 14
+        lower = message.lower()
+        if "month" in lower or "30" in lower:
+            days = 30
+        return await get_sleep_analysis(days=days)
+
+    register_skill(Skill(
+        id="sleep_data",
+        name="Sleep Analysis",
+        description="View sleep data from Whoop — duration, performance, efficiency, stages",
+        examples=[
+            "how did I sleep", "sleep quality", "sleep performance",
+            "sleep trends", "am I sleeping enough",
+        ],
+        read_handler=_sleep_read,
+        write_handler=None,
+        category="personal",
+    ))
+
+    async def _strength_read(message, http_client=None):
+        from app.services.fitness.fitness_query import get_strength_progress
+        days = 30
+        lower = message.lower()
+        if "week" in lower or "7" in lower:
+            days = 7
+        return await get_strength_progress(days=days)
+
+    register_skill(Skill(
+        id="strength_data",
+        name="Strength Progress",
+        description="View Tonal strength scores, muscle breakdown, volume and rep trends",
+        examples=[
+            "tonal strength score", "strength progress",
+            "muscle breakdown", "lifting volume", "tonal workouts",
+        ],
+        read_handler=_strength_read,
+        write_handler=None,
+        category="personal",
     ))
 
     logger.info("all_skills_registered", extra={"count": len(_REGISTRY)})

@@ -606,10 +606,40 @@ select:focus, input[type="text"]:focus {
 /* ── Input Area ── */
 #input-area {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     padding: 16px 24px;
     border-top: 1px solid var(--border);
     background: var(--bg-sidebar);
+}
+
+#quick-actions {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+}
+#quick-actions::-webkit-scrollbar { display: none; }
+
+.quick-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-secondary);
+    padding: 6px 14px;
+    font-size: 12px;
+    font-family: var(--font);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.quick-btn:hover, .quick-btn:active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
 }
 
 #user-input {

@@ -151,6 +151,11 @@ async function initApp() {
     });
     clearBtn.addEventListener('click', clearChat);
 
+    // Quick action buttons
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+        btn.addEventListener('click', () => handleQuickAction(btn.dataset.action));
+    });
+
     // Mode buttons
     document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -271,60 +276,53 @@ async function handleSend() {
     const loadingEl = addLoading();
 
     try {
-        let data;
-        switch (state.mode) {
-            case 'chat':
-                data = await sendChat(text);
-                break;
-            case 'task':
-                data = await sendTask(text);
-                break;
-            case 'research':
-                data = await sendResearch(text);
-                break;
-            case 'compete':
-                data = await sendCompete(text);
-                break;
-            case 'meals':
-                data = await handleMealsInput(text);
-                break;
-            case 'home':
-                data = await handleHomeInput(text);
-                break;
-            case 'medical':
-                data = await handleMedicalInput(text);
-                break;
-            case 'recipes':
-                data = await handleRecipeInput(text);
-                break;
-            case 'calendar':
-                data = await handleCalendarInput(text);
-                break;
-            case 'workout':
-                data = await handleWorkoutInput(text);
-                break;
-        }
-        loadingEl.remove();
+        // Chat mode uses streaming
+        if (state.mode === 'chat') {
+            loadingEl.remove();
+            await sendChatStream(text);
+        } else {
+            let data;
+            switch (state.mode) {
+                case 'task':
+                    data = await sendTask(text);
+                    break;
+                case 'research':
+                    data = await sendResearch(text);
+                    break;
+                case 'compete':
+                    data = await sendCompete(text);
+                    break;
+                case 'meals':
+                    data = await handleMealsInput(text);
+                    break;
+                case 'home':
+                    data = await handleHomeInput(text);
+                    break;
+                case 'medical':
+                    data = await handleMedicalInput(text);
+                    break;
+                case 'recipes':
+                    data = await handleRecipeInput(text);
+                    break;
+                case 'calendar':
+                    data = await handleCalendarInput(text);
+                    break;
+                case 'workout':
+                    data = await handleWorkoutInput(text);
+                    break;
+            }
+            loadingEl.remove();
 
-        if (data) {
-            if (state.mode === 'research') {
-                renderResearchResults(data);
-            } else {
-                const role = data.role || '';
-                const duration = data.duration_ms ? `${Math.round(data.duration_ms)}ms` : '';
-                const workflow = data.workflow || '';
-                const intent = data.intent || '';
-                const meta = [role, workflow, intent, duration].filter(Boolean).join(' · ');
-                addMessage(data.content, 'ai', meta);
-
-                // Update history for chat mode
-                if (state.mode === 'chat') {
-                    state.history.push({ role_name: 'user', content: text });
-                    state.history.push({ role_name: 'assistant', content: data.content });
-                    // Keep last 20
-                    if (state.history.length > 20) state.history = state.history.slice(-20);
-                    // Refresh conversation list (first message creates the conversation)
-                    loadConversationList();
+            if (data) {
+                if (state.mode === 'research') {
+                    renderResearchResults(data);
+                } else {
+                    const role = data.role || '';
+                    const duration = data.duration_ms ? `${Math.round(data.duration_ms)}ms` : '';
+                    const workflow = data.workflow || '';
+                    const intent = data.intent || '';
+                    const meta = [role, workflow, intent, duration].filter(Boolean).join(' · ');
+                    addMessage(data.content, 'ai', meta);
                 }
             }
         }
@@ -336,6 +334,85 @@ async function handleSend() {
     state.sending = false;
     sendBtn.disabled = false;
     inputEl.focus();
+}
+
+async function sendChatStream(message) {
+    const body = {
+        message,
+        conversation_id: state.conversationId,
+        history: state.history,
+        user_id: state.userId,
+    };
+
+    const resp = await fetch(`${API}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+
+    // Create a message div for streaming into
+    const div = document.createElement('div');
+    div.className = 'message ai';
+    const metaEl = document.createElement('div');
+    metaEl.className = 'meta';
+    metaEl.innerHTML = '<span class="role-tag">streaming...</span>';
+    div.appendChild(metaEl);
+    const contentEl = document.createElement('div');
+    contentEl.className = 'stream-content';
+    div.appendChild(contentEl);
+    messagesEl.appendChild(div);
+
+    let fullText = '';
+    let meta = {};
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line in buffer
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const json = line.slice(6);
+            try {
+                const evt = JSON.parse(json);
+                if (evt.type === 'meta') {
+                    meta = JSON.parse(evt.data);
+                    metaEl.innerHTML = `<span class="role-tag">${escapeHtml(meta.role || '')}</span>`;
+                    if (meta.intent) {
+                        metaEl.innerHTML += ` <span class="role-tag">${escapeHtml(meta.intent)}</span>`;
+                    }
+                } else if (evt.type === 'token') {
+                    fullText += evt.text;
+                    contentEl.innerHTML = formatContent(fullText);
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                } else if (evt.type === 'content') {
+                    // Full content from skill (non-streamed)
+                    fullText = evt.text;
+                    contentEl.innerHTML = formatContent(fullText);
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                } else if (evt.type === 'done') {
+                    if (evt.duration_ms) {
+                        const dur = `${Math.round(evt.duration_ms)}ms`;
+                        metaEl.innerHTML += ` <span class="role-tag">${dur}</span>`;
+                    }
+                }
+            } catch (e) { /* skip malformed events */ }
+        }
+    }
+
+    // Update conversation history
+    state.history.push({ role_name: 'user', content: message });
+    state.history.push({ role_name: 'assistant', content: fullText });
+    if (state.history.length > 20) state.history = state.history.slice(-20);
+    loadConversationList();
 }
 
 // ── API calls ──
@@ -446,6 +523,189 @@ function addLoading() {
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return div;
+}
+
+async function handleQuickAction(action) {
+    if (state.sending) return;
+    state.sending = true;
+
+    const labels = {
+        briefing: '☀ Loading morning briefing...',
+        dinner: '🍽️ Checking tonight\'s dinner...',
+        grocery: '🛒 Generating grocery list...',
+        digest: '🔒 Building weekly digest...',
+        linkedin: '📝 Drafting LinkedIn post...',
+    };
+    const endpoints = {
+        briefing: '/skills/briefing/preview',
+        dinner: '/skills/meals/tonight',
+        grocery: '/skills/grocery',
+        digest: '/skills/research/weekly-digest',
+        linkedin: '/skills/linkedin/draft',
+    };
+
+    addSystemMessage(labels[action] || 'Working...');
+    const loadingEl = addLoading();
+
+    try {
+        const resp = await fetch(`${API}${endpoints[action]}`);
+        const data = await resp.json();
+        loadingEl.remove();
+
+        if (action === 'briefing') {
+            renderBriefing(data);
+        } else if (action === 'dinner') {
+            renderDinner(data);
+        } else if (action === 'grocery') {
+            renderGrocery(data);
+        } else if (action === 'digest') {
+            renderDigest(data);
+        } else if (action === 'linkedin') {
+            renderLinkedin(data);
+        }
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error: ${e.message}`, 'ai', 'error');
+    }
+    state.sending = false;
+}
+
+function renderBriefing(b) {
+    const parts = [];
+
+    // Weather
+    const w = b.weather || {};
+    if (w.error) {
+        parts.push(`**Weather:** ${w.error}`);
+    } else {
+        parts.push(`**☀ Weather:** ${w.current_temp || '?'}°F (feels like ${w.feels_like || '?'}°F) — ${w.condition || ''}`);
+        if (w.forecast) {
+            parts.push(w.forecast.map(d => `  ${d.date}: ${d.low}–${d.high}°F, ${d.condition}, ${d.precip_chance}% rain`).join('\n'));
+        }
+    }
+
+    // Workout
+    const wo = b.workout || {};
+    const sched = wo.scheduled || [];
+    if (sched.length) {
+        parts.push('**💪 Workout:**\n' + sched.map(s => `  • ${s.activity} — ${s.duration_minutes} min`).join('\n'));
+    } else {
+        parts.push('**💪 Workout:** Rest day');
+    }
+
+    // Articles
+    const articles = b.articles || [];
+    if (articles.length) {
+        parts.push('**📰 Top Articles:**\n' + articles.map((a, i) =>
+            `  ${i+1}. [${a.title}](${a.url}) (${a.source})`
+        ).join('\n'));
+    }
+
+    // Calendar
+    const agenda = b.agenda || {};
+    const events = agenda.agenda || {};
+    const eventEntries = Object.entries(events);
+    if (eventEntries.length) {
+        parts.push('**📅 Calendar:**\n' + eventEntries.map(([date, evts]) =>
+            `  ${date}:\n` + evts.map(e => `    • ${e.title}${e.event_time ? ' at ' + e.event_time : ''}`).join('\n')
+        ).join('\n'));
+    } else {
+        parts.push('**📅 Calendar:** No upcoming events');
+    }
+
+    // Email
+    const recs = (b.email_recommendations || {}).recommendations || [];
+    if (recs.length) {
+        parts.push('**📧 Email Actions:**\n' + recs.map(r =>
+            `  [${(r.urgency || 'medium').toUpperCase()}] ${r.action} — ${r.source_subject || ''}`
+        ).join('\n'));
+    }
+
+    addMessage(parts.join('\n\n'), 'ai', 'Daily Briefing');
+}
+
+function renderDinner(r) {
+    if (r.error || r.parse_error) {
+        addMessage(r.error || r.raw_recipe || 'Could not get dinner recipe.', 'ai', 'Dinner');
+        return;
+    }
+    const lines = [
+        `**🍽️ ${r.dish_name || 'Tonight\'s Dinner'}**`,
+        r.description || '',
+        `Prep: ${r.prep_time_min || '?'} min | Cook: ${r.cook_time_min || '?'} min | Servings: ${r.servings || '?'}`,
+        '',
+        '**Ingredients:**',
+        ...(r.ingredients || []).map(i => typeof i === 'object' ? `  • ${i.quantity || ''} ${i.item || ''}${i.notes ? ' (' + i.notes + ')' : ''}` : `  • ${i}`),
+        '',
+        '**Instructions:**',
+        ...(r.instructions || []).map(s => `  ${s}`),
+    ];
+    if (r.tips) lines.push('', `**Tips:** ${r.tips}`);
+    if (r.why_this_dish) lines.push(`**Why:** ${r.why_this_dish}`);
+    addMessage(lines.join('\n'), 'ai', 'Tonight\'s Dinner');
+}
+
+function renderGrocery(data) {
+    if (data.error) {
+        addMessage(data.error, 'ai', 'Grocery List');
+        return;
+    }
+    const lines = ['**🛒 Grocery List**', ''];
+    for (const section of (data.sections || [])) {
+        lines.push(`**${section.name}:**`);
+        for (const item of (section.items || [])) {
+            lines.push(`  □ ${item.quantity || ''} ${item.item || ''}`);
+        }
+        lines.push('');
+    }
+    addMessage(lines.join('\n'), 'ai', 'Grocery List');
+}
+
+function renderDigest(data) {
+    if (data.error) {
+        addMessage(data.error, 'ai', 'Weekly Digest');
+        return;
+    }
+    const lines = ['**🔒 Weekly AI + Cybersecurity Digest**', ''];
+    if (data.executive_summary) {
+        lines.push(`**Executive Summary:** ${data.executive_summary}`, '');
+    }
+    if (data.top_developments) {
+        lines.push('**Top Developments:**');
+        data.top_developments.forEach(d => {
+            lines.push(`  • **${d.title || ''}** — ${d.analysis || ''}`);
+        });
+        lines.push('');
+    }
+    if (data.trends) {
+        lines.push('**Key Trends:**');
+        data.trends.forEach(t => lines.push(`  → ${t}`));
+        lines.push('');
+    }
+    if (data.action_items) {
+        lines.push('**Action Items:**');
+        data.action_items.forEach(a => lines.push(`  ☐ ${a}`));
+    }
+    addMessage(lines.join('\n'), 'ai', 'Weekly Digest');
+}
+
+function renderLinkedin(data) {
+    if (data.error) {
+        addMessage(data.error, 'ai', 'LinkedIn');
+        return;
+    }
+    const lines = [
+        `**📝 LinkedIn Post Draft**`,
+        '',
+        data.post || '',
+        '',
+        (data.hashtags || []).join(' '),
+    ];
+    if (data.source_articles && data.source_articles.length) {
+        lines.push('', '**Source Articles:**');
+        data.source_articles.forEach(a => lines.push(`  • ${a}`));
+    }
+    addMessage(lines.join('\n'), 'ai', 'LinkedIn Draft');
 }
 
 function renderResearchResults(data) {

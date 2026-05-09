@@ -1,7 +1,9 @@
 import logging
+import secrets
 import time
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from app.models.schemas import (
     TaskRequest, TaskResponse, CompetitionRequest, RoleType, DomainType, ROLE_DOMAIN_MAP,
@@ -428,6 +430,144 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float, ht
     )
 
 
+@router.post("/chat/stream")
+async def chat_stream(req: ChatRequest, request: Request):
+    """Streaming SSE version of the conversational endpoint.
+
+    Returns Server-Sent Events with token-by-token streaming for the final response.
+    Non-streaming pre-work (classification, skill data) runs before the stream begins.
+    """
+    import asyncio
+    import json as _json
+
+    start = time.perf_counter()
+    http_client = request.app.state.http_client
+
+    # ── Pre-work (not streamed) ──
+    from app.services.llm_intent_service import classify_chat_intent
+    classification = await classify_chat_intent(req.message, http_client)
+
+    if req.role:
+        roles = await resolve_roles(req.role, req.secondary_role)
+    else:
+        roles = await resolve_roles(classification["role"], None)
+
+    action = classification["action"]
+    skill_id = classification["skill"]
+
+    # ── Skill dispatch (non-streaming — skills return complete text) ──
+    from app.services.skill_registry import get_skill
+
+    skill_content = None
+    if skill_id and skill_id != "none":
+        skill = get_skill(skill_id)
+        if skill:
+            try:
+                if action == "execute" and skill.write_handler:
+                    skill_content = await skill.write_handler(req.message, http_client)
+                elif skill.read_handler:
+                    skill_content = await skill.read_handler(req.message, http_client)
+            except Exception as e:
+                logger.warning(f"Skill {skill_id} failed in stream: {e}")
+
+    # If skill returned complete content directly, send it as one SSE event
+    if skill_content and action == "execute":
+        async def _skill_stream():
+            meta = _json.dumps({
+                "role": roles.primary.role.value,
+                "domain": roles.primary.domain.value,
+                "intent": f"skill:{skill_id}",
+                "duration_ms": round((time.perf_counter() - start) * 1000, 2),
+            })
+            yield f"data: {_json.dumps({'type': 'meta', 'data': meta})}\n\n"
+            yield f"data: {_json.dumps({'type': 'content', 'text': skill_content})}\n\n"
+            yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+
+            # Fire-and-forget log
+            asyncio.create_task(_log_stream_turn(req, roles, skill_content, f"skill:{skill_id}", start, http_client))
+
+        return StreamingResponse(_skill_stream(), media_type="text/event-stream")
+
+    # ── Build context for streaming generation ──
+    from app.services.prompt_service import build_chat_prompt
+    from app.memory.semantic import search_semantic
+    from app.services.ollama_service import generate_stream, select_model
+
+    system_prompt = build_chat_prompt(roles)
+
+    if req.history:
+        history_block = "\n".join(
+            f"{'User' if m.role_name == 'user' else 'Assistant'}: {m.content}"
+            for m in req.history[-10:]
+        )
+        user_prompt = f"Conversation so far:\n{history_block}\n\nUser: {req.message}"
+    else:
+        user_prompt = req.message
+
+    rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
+    rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
+
+    context_parts = []
+    if rag_context:
+        context_parts.append("Relevant knowledge:\n" + "\n---\n".join(rag_context))
+    if skill_content:
+        context_parts.append("Live data:\n" + skill_content)
+
+    if context_parts:
+        user_prompt += "\n\n[Context — use ONLY this data to answer. Do not make up information not present in the context.]\n" + "\n\n".join(context_parts)
+
+    model = select_model(req.message)
+    intent = f"skill:{skill_id}" if skill_id and skill_id != "none" else "conversation"
+
+    async def _event_stream():
+        meta = _json.dumps({
+            "role": roles.primary.role.value,
+            "domain": roles.primary.domain.value,
+            "intent": intent,
+            "model": model,
+        })
+        yield f"data: {_json.dumps({'type': 'meta', 'data': meta})}\n\n"
+
+        full_content = []
+        async for token in generate_stream(
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            model=model,
+            http_client=http_client,
+        ):
+            full_content.append(token)
+            yield f"data: {_json.dumps({'type': 'token', 'text': token})}\n\n"
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        yield f"data: {_json.dumps({'type': 'done', 'duration_ms': duration_ms})}\n\n"
+
+        # Fire-and-forget log
+        content = "".join(full_content)
+        asyncio.create_task(_log_stream_turn(req, roles, content, intent, start, http_client))
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+async def _log_stream_turn(req, roles, content: str, intent: str, start: float, http_client=None):
+    """Log a streamed chat turn to episodic memory."""
+    try:
+        from app.memory.episodic import log_chat_turn
+        duration_ms = (time.perf_counter() - start) * 1000
+        await log_chat_turn(
+            conversation_id=str(req.conversation_id),
+            role=roles.primary.role.value,
+            user_message=req.message,
+            assistant_message=content,
+            domain=roles.primary.domain.value,
+            duration_ms=round(duration_ms, 2),
+        )
+        if getattr(req, "user_id", None):
+            from app.services.conversation_service import ensure_conversation
+            await ensure_conversation(req.conversation_id, req.user_id, title=req.message[:200], http_client=http_client)
+    except Exception as e:
+        logger.warning(f"stream_log_failed: {e}")
+
+
 @router.get("/chat/history")
 async def chat_history(conversation_id: str, limit: int = 50):
     """Retrieve persisted chat history for a conversation."""
@@ -783,15 +923,15 @@ async def ingest_file(request: Request):
 @router.post("/skills/medical/tell")
 async def medical_tell(req: MedicalTellRequest, request: Request):
     """Tell PAI about a medical event, or ask about medical history/documents."""
-    import re
-    lower = req.text.lower().strip()
-    read_patterns = [
-        r'^(what|when|where|which|show|list|read|tell me|get|display|retrieve|pull up|do |does |did |has |have |is |are |was |were )',
-        r'(recommend|results|history|summary|lab\b|labs\b|records|shots?|vaccin|immuniz|medications?|diagnosis|allergies)',
-        r'\?$',
-        r'^how (is|are|was|were)',
-    ]
-    is_read = any(re.search(p, lower) for p in read_patterns)
+    from app.services.ollama_service import generate
+    # Use LLM to determine if this is a read (query) or write (record)
+    raw = await generate(
+        prompt=f"Is this a question asking about medical history/records, or a statement recording new medical data? Return ONLY 'read' or 'write'.\n\nMessage: {req.text}",
+        system_prompt="Classify medical messages. 'read' = asking about history, medications, records, lab results, appointments, vaccinations. 'write' = logging a new visit, recording medication, adding health data. Return only one word.",
+        model="qwen3:4b",
+        http_client=request.app.state.http_client,
+    )
+    is_read = "read" in raw.strip().lower()
     if is_read:
         from app.services.skill_registry import get_skill
         skill = get_skill("medical")
@@ -1156,6 +1296,41 @@ async def preview_briefing(request: Request):
     return briefing
 
 
+# ── Content Services (grocery, linkedin, digest, dinner) ────────
+
+
+@router.get("/skills/grocery")
+async def get_grocery_list(request: Request):
+    """Generate a consolidated grocery list from meal plans."""
+    from app.services.content_service import generate_grocery_list
+    result = await generate_grocery_list(http_client=request.app.state.http_client)
+    return result
+
+
+@router.get("/skills/linkedin/draft")
+async def get_linkedin_draft(request: Request, topic: str = ""):
+    """Draft a LinkedIn post from top articles."""
+    from app.services.content_service import draft_linkedin_post
+    result = await draft_linkedin_post(topic=topic, http_client=request.app.state.http_client)
+    return result
+
+
+@router.get("/skills/research/weekly-digest")
+async def get_weekly_digest(request: Request):
+    """Generate weekly AI + cybersecurity digest."""
+    from app.services.content_service import generate_weekly_digest
+    result = await generate_weekly_digest(http_client=request.app.state.http_client)
+    return result
+
+
+@router.get("/skills/meals/tonight")
+async def get_tonights_dinner(request: Request):
+    """Get tonight's dinner recipe."""
+    from app.services.content_service import get_tonights_dinner as _get_dinner
+    result = await _get_dinner(http_client=request.app.state.http_client)
+    return result
+
+
 # ── Process Engine ──────────────────────────────────────────────
 
 
@@ -1414,3 +1589,128 @@ async def memory_stats():
     """Get semantic memory statistics."""
     from app.services.memory_consolidation import get_memory_stats
     return await get_memory_stats()
+
+
+# ── Fitness Platform Integration ──
+
+
+@router.get("/fitness/summary")
+async def fitness_summary(days: int = 7):
+    """Get cross-platform fitness summary."""
+    from app.services.fitness.fitness_query import get_fitness_summary
+    return {"summary": await get_fitness_summary(days=days)}
+
+
+@router.get("/fitness/workouts")
+async def fitness_workouts(days: int = 7, platform: str = ""):
+    """Get workout history across platforms."""
+    from app.services.fitness.fitness_query import get_workout_details
+    return {"workouts": await get_workout_details(days=days, platform=platform)}
+
+
+@router.get("/fitness/recovery")
+async def fitness_recovery(days: int = 14):
+    """Get recovery and HRV trends."""
+    from app.services.fitness.fitness_query import get_recovery_trends
+    return {"recovery": await get_recovery_trends(days=days)}
+
+
+@router.get("/fitness/sleep")
+async def fitness_sleep(days: int = 14):
+    """Get sleep analysis."""
+    from app.services.fitness.fitness_query import get_sleep_analysis
+    return {"sleep": await get_sleep_analysis(days=days)}
+
+
+@router.get("/fitness/strength")
+async def fitness_strength(days: int = 30):
+    """Get Tonal strength progress."""
+    from app.services.fitness.fitness_query import get_strength_progress
+    return {"strength": await get_strength_progress(days=days)}
+
+
+@router.post("/fitness/sync")
+async def fitness_sync():
+    """Manually trigger a sync of all configured fitness platforms."""
+    from app.services.fitness.fitness_query import trigger_sync
+    return {"result": await trigger_sync()}
+
+
+@router.get("/fitness/sync/status")
+async def fitness_sync_status():
+    """Get sync status for all fitness platforms."""
+    from app.services.fitness.fitness_query import _get_sync_status
+    return {"platforms": await _get_sync_status()}
+
+
+# ── Whoop OAuth2 ─────────────────────────────────────────────
+
+WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
+WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
+WHOOP_SCOPES = "offline read:workout read:recovery read:sleep read:cycles read:profile read:body_measurement"
+
+
+@router.get("/whoop/auth")
+async def whoop_auth_start(request: Request):
+    """Start Whoop OAuth2 flow. Visit this URL in your browser."""
+    if not settings.whoop_client_id:
+        raise HTTPException(400, "WHOOP_CLIENT_ID not configured in .env")
+
+    state = secrets.token_urlsafe(8)[:8]
+    redis = request.app.state.redis
+    await redis.set("pai:whoop_oauth_state", state, ex=600)
+
+    redirect_uri = str(request.base_url).rstrip("/") + "/whoop/callback"
+    params = (
+        f"?response_type=code"
+        f"&client_id={settings.whoop_client_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope={WHOOP_SCOPES.replace(' ', '%20')}"
+        f"&state={state}"
+    )
+    auth_url = WHOOP_AUTH_URL + params
+    return RedirectResponse(auth_url)
+
+
+@router.get("/whoop/callback")
+async def whoop_auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Whoop OAuth2 callback — exchanges code for tokens."""
+    if error:
+        return HTMLResponse(f"<h2>Whoop authorization failed</h2><p>{error}</p>", status_code=400)
+
+    redis = request.app.state.redis
+    expected = await redis.get("pai:whoop_oauth_state")
+    if not expected or state != expected:
+        return HTMLResponse("<h2>Invalid state parameter</h2><p>CSRF check failed. Try again from /whoop/auth</p>", status_code=400)
+    await redis.delete("pai:whoop_oauth_state")
+
+    if not code:
+        return HTMLResponse("<h2>No authorization code received</h2>", status_code=400)
+
+    redirect_uri = str(request.base_url).rstrip("/") + "/whoop/callback"
+
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(WHOOP_TOKEN_URL, data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": settings.whoop_client_id,
+            "client_secret": settings.whoop_client_secret,
+            "redirect_uri": redirect_uri,
+        })
+
+    if resp.status_code != 200:
+        logger.error("whoop_token_exchange_failed", extra={"status": resp.status_code, "body": resp.text})
+        return HTMLResponse(f"<h2>Token exchange failed</h2><pre>{resp.text}</pre>", status_code=500)
+
+    tokens = resp.json()
+
+    # Store tokens in DB
+    from app.services.fitness.whoop_sync import store_whoop_tokens
+    await store_whoop_tokens(tokens)
+
+    return HTMLResponse(
+        "<h2>Whoop connected successfully!</h2>"
+        "<p>Access token and refresh token stored. PAI will now sync your Whoop data.</p>"
+        "<p>You can close this tab.</p>"
+    )

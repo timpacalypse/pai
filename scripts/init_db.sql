@@ -519,3 +519,93 @@ CREATE TABLE IF NOT EXISTS workout_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_workout_logs_date ON workout_logs (log_date DESC);
+
+-- ────────────────────────────────────────────
+-- FITNESS PLATFORM SYNC
+-- ────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS fitness_sync_state (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL UNIQUE,
+    last_sync_at TIMESTAMP WITH TIME ZONE,
+    sync_cursor TEXT DEFAULT '',
+    status VARCHAR(20) DEFAULT 'idle',
+    error_message TEXT DEFAULT '',
+    records_synced INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS fitness_workouts (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    external_id VARCHAR(255) NOT NULL,
+    workout_type VARCHAR(100) DEFAULT '',
+    sport_name VARCHAR(100) DEFAULT '',
+    title VARCHAR(500) DEFAULT '',
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE,
+    duration_seconds INTEGER DEFAULT 0,
+    calories_kj REAL DEFAULT 0,
+    distance_meters REAL DEFAULT 0,
+    avg_heart_rate INTEGER DEFAULT 0,
+    max_heart_rate INTEGER DEFAULT 0,
+    strain REAL DEFAULT 0,
+    metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(platform, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fitness_workouts_platform ON fitness_workouts (platform);
+CREATE INDEX IF NOT EXISTS idx_fitness_workouts_start ON fitness_workouts (start_time DESC);
+
+CREATE TABLE IF NOT EXISTS fitness_recovery (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    external_id VARCHAR(255) NOT NULL,
+    record_date DATE NOT NULL,
+    recovery_score REAL DEFAULT 0,
+    resting_heart_rate REAL DEFAULT 0,
+    hrv_rmssd REAL DEFAULT 0,
+    spo2_percentage REAL DEFAULT 0,
+    skin_temp_celsius REAL DEFAULT 0,
+    metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(platform, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fitness_recovery_date ON fitness_recovery (record_date DESC);
+
+CREATE TABLE IF NOT EXISTS fitness_sleep (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    external_id VARCHAR(255) NOT NULL,
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE,
+    total_duration_seconds INTEGER DEFAULT 0,
+    sleep_performance REAL DEFAULT 0,
+    sleep_efficiency REAL DEFAULT 0,
+    respiratory_rate REAL DEFAULT 0,
+    is_nap BOOLEAN DEFAULT FALSE,
+    stage_summary JSONB DEFAULT '{}',
+    metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(platform, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fitness_sleep_start ON fitness_sleep (start_time DESC);
+
+CREATE TABLE IF NOT EXISTS fitness_strength (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    external_id VARCHAR(255) NOT NULL,
+    workout_title VARCHAR(500) DEFAULT '',
+    workout_type VARCHAR(100) DEFAULT '',
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    total_volume REAL DEFAULT 0,
+    total_reps INTEGER DEFAULT 0,
+    duration_seconds INTEGER DEFAULT 0,
+    sets JSONB DEFAULT '[]',
+    strength_scores JSONB DEFAULT '{}',
+    metrics JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(platform, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fitness_strength_start ON fitness_strength (start_time DESC);

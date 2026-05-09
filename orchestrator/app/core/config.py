@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pai:pai_dev_secret@postgres:5432/pai"
     redis_url: str = "redis://redis:6379/0"
     ollama_url: str = "http://192.168.0.58:11434"
-    ollama_default_model: str = "llama3.1:8b"
+    ollama_default_model: str = "qwen3:8b"
     orchestrator_env: str = "development"
     orchestrator_log_level: str = "info"
 
@@ -35,6 +35,23 @@ class Settings(BaseSettings):
     # Google Calendar
     google_credentials_path: str = "/app/credentials/google_credentials.json"
     google_token_path: str = "/app/credentials/google_token.json"
+
+    # Fitness platform sync
+    fitness_sync_hours: float = 4.0  # hours between sync runs, 0 = disabled
+
+    # Whoop (OAuth2 — tokens stored in DB after initial auth)
+    whoop_client_id: str = ""
+    whoop_client_secret: str = ""
+    whoop_access_token: str = ""
+    whoop_refresh_token: str = ""
+
+    # Peloton (username/password auth)
+    peloton_username: str = ""
+    peloton_password: str = ""
+
+    # Tonal (Auth0 password grant)
+    tonal_email: str = ""
+    tonal_password: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

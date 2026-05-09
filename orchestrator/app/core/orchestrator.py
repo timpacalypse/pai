@@ -156,7 +156,7 @@ async def _run_competition(
 
     # 3b. Persist quality scores
     try:
-        intent = classify_intent(request.input)
+        intent = await classify_intent(request.input)
         model = select_model(request.input)
         await store_scores(
             request_id=request.request_id,
@@ -171,7 +171,7 @@ async def _run_competition(
 
     # 3c. Record procedural memory
     try:
-        intent_val = classify_intent(request.input).value
+        intent_val = (await classify_intent(request.input)).value
         avg = sum(s.total for s in result.scores) / max(len(result.scores), 1)
         await record_outcome(intent_val, "multi_agent_competition", agent_names, avg)
     except Exception as e:
@@ -258,7 +258,7 @@ async def handle_task(
     start = time.perf_counter()
 
     # 1. Classify intent
-    intent = classify_intent(request.input)
+    intent = await classify_intent(request.input)
 
     # 2. Resolve roles — LLM-inferred if not explicitly set
     if request.role:
@@ -455,7 +455,7 @@ async def handle_competition(
     # Validate agent names — fall back to auto-selection if needed
     agent_names = [a for a in request.agents if a in _agents]
     if len(agent_names) < 2:
-        intent = classify_intent(request.input)
+        intent = await classify_intent(request.input)
         agent_names = select_agents_for_task(request.input, intent)
         if len(agent_names) < 2:
             agent_names = ["research", "analysis"]

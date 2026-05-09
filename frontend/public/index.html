@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PAI — Personal AI</title>
-    <link rel="stylesheet" href="styles.css?v=20260416b">
+    <link rel="stylesheet" href="styles.css?v=20260429a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#0f1117">
@@ -154,6 +154,13 @@
             <div id="messages"></div>
 
             <div id="input-area">
+                <div id="quick-actions">
+                    <button class="quick-btn" data-action="briefing" title="Morning Briefing">☀ Good Morning</button>
+                    <button class="quick-btn" data-action="dinner" title="Tonight's Dinner">🍽️ Dinner</button>
+                    <button class="quick-btn" data-action="grocery" title="Grocery List">🛒 Grocery</button>
+                    <button class="quick-btn" data-action="digest" title="Weekly Digest">🔒 Digest</button>
+                    <button class="quick-btn" data-action="linkedin" title="LinkedIn Draft">📝 LinkedIn</button>
+                </div>
                 <textarea id="user-input" placeholder="Type a message..." rows="2"></textarea>
                 <button id="send-btn" title="Send">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -164,6 +171,6 @@
         </main>
     </div>
 
-    <script src="app.js?v=20260416b"></script>
+    <script src="app.js?v=20260429a"></script>
 </body>
 </html>
