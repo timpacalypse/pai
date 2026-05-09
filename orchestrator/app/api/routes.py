@@ -1714,3 +1714,177 @@ async def whoop_auth_callback(request: Request, code: str = "", state: str = "",
         "<p>Access token and refresh token stored. PAI will now sync your Whoop data.</p>"
         "<p>You can close this tab.</p>"
     )
+
+
+# ── Villain Challenge System ───────────────────────────────────
+
+@router.get("/villain/profile")
+async def villain_profile():
+    """Get current hero profile, HCI, domain scores, tier, archetype."""
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+    return await get_hero_profile()
+
+
+@router.get("/villain/challenge")
+async def villain_challenge():
+    """Get the current active challenge with objectives and battle status."""
+    from app.services.villain_challenge.villain_engine import get_active_challenge
+    from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+
+    challenge = await get_active_challenge()
+    if not challenge:
+        return {"challenge": None, "battle_status": None}
+
+    hero_data = await get_hero_profile()
+    battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+
+    return {"challenge": challenge, "battle_status": battle_status}
+
+
+@router.post("/villain/challenge/create")
+async def villain_challenge_create():
+    """Manually trigger weekly challenge creation (normally automatic on Monday)."""
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+    from app.services.villain_challenge.villain_engine import (
+        select_weekly_villain, generate_weekly_objectives, create_weekly_challenge,
+    )
+
+    hero_data = await get_hero_profile()
+    villain_selection = await select_weekly_villain(hero_data)
+    objectives = await generate_weekly_objectives(villain_selection, hero_data)
+    challenge = await create_weekly_challenge(villain_selection, objectives)
+    return challenge
+
+
+@router.post("/villain/challenge/resolve")
+async def villain_challenge_resolve():
+    """Manually trigger weekly battle resolution (normally automatic on Sunday)."""
+    from app.services.villain_challenge.villain_engine import get_active_challenge
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+    from app.services.villain_challenge.battle_system import resolve_weekly_battle
+    from app.services.villain_challenge.xp_engine import award_battle_xp
+    from app.services.villain_challenge.narrative import generate_battle_report
+
+    challenge = await get_active_challenge()
+    if not challenge or challenge.get("status") != "active":
+        raise HTTPException(status_code=400, detail="No active challenge to resolve")
+
+    hero_data = await get_hero_profile()
+    outcome = await resolve_weekly_battle(challenge, hero_data)
+    xp_result = await award_battle_xp(outcome, challenge_id=challenge.get("id"))
+    narrative = await generate_battle_report(outcome, challenge, hero_data, xp_result)
+
+    return {
+        "outcome": outcome,
+        "xp": xp_result,
+        "narrative": narrative,
+    }
+
+
+@router.post("/villain/checkin")
+async def villain_checkin(request: Request):
+    """Submit a daily fitness check-in."""
+    from app.core.database import async_session as db_session
+    from sqlalchemy import text as sql_text
+
+    body = await request.json()
+
+    async with db_session() as session:
+        await session.execute(sql_text("""
+            INSERT INTO daily_checkins
+                (checkin_date, body_weight, body_fat_pct, soreness_level,
+                 soreness_notes, injury_notes, nutrition_adherence,
+                 protein_target_hit, mobility_done, notes)
+            VALUES (CURRENT_DATE, :bw, :bf, :sore, :sore_notes, :injury,
+                    :nutr, :protein, :mobility, :notes)
+            ON CONFLICT (checkin_date) DO UPDATE SET
+                body_weight = COALESCE(EXCLUDED.body_weight, daily_checkins.body_weight),
+                body_fat_pct = COALESCE(EXCLUDED.body_fat_pct, daily_checkins.body_fat_pct),
+                soreness_level = EXCLUDED.soreness_level,
+                soreness_notes = EXCLUDED.soreness_notes,
+                injury_notes = EXCLUDED.injury_notes,
+                nutrition_adherence = EXCLUDED.nutrition_adherence,
+                protein_target_hit = EXCLUDED.protein_target_hit,
+                mobility_done = EXCLUDED.mobility_done,
+                notes = EXCLUDED.notes
+        """), {
+            "bw": body.get("body_weight"),
+            "bf": body.get("body_fat_pct"),
+            "sore": body.get("soreness_level", 0),
+            "sore_notes": body.get("soreness_notes", ""),
+            "injury": body.get("injury_notes", ""),
+            "nutr": body.get("nutrition_adherence", 0),
+            "protein": body.get("protein_target_hit", False),
+            "mobility": body.get("mobility_done", False),
+            "notes": body.get("notes", ""),
+        })
+        await session.commit()
+
+    # Award XP for check-in
+    from app.services.villain_challenge.xp_engine import award_xp
+    xp = await award_xp(25, "daily_checkin", category="checkin")
+
+    return {"status": "checked_in", "xp": xp}
+
+
+@router.get("/villain/battle-status")
+async def villain_battle_status():
+    """Get daily battle probability and status narrative."""
+    from app.services.villain_challenge.villain_engine import get_active_challenge
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+    from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+    from app.services.villain_challenge.narrative import generate_daily_update
+
+    challenge = await get_active_challenge()
+    if not challenge:
+        return {"status": "No active challenge", "narrative": None}
+
+    hero_data = await get_hero_profile()
+    battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+    tone = challenge.get("narrative_tone", "shield_tactical")
+    narrative = await generate_daily_update(battle_status, challenge, hero_data, tone=tone)
+
+    return {"battle_status": battle_status, "narrative": narrative}
+
+
+@router.get("/villain/history")
+async def villain_history(limit: int = 10):
+    """Get battle history."""
+    from app.services.villain_challenge.battle_system import get_battle_history
+    return {"battles": await get_battle_history(limit=limit)}
+
+
+@router.get("/villain/nemesis")
+async def villain_nemesis():
+    """Get nemesis tracker list."""
+    from app.services.villain_challenge.battle_system import get_nemesis_list
+    return {"nemeses": await get_nemesis_list()}
+
+
+@router.get("/villain/xp")
+async def villain_xp():
+    """Get XP summary and recent history."""
+    from app.services.villain_challenge.xp_engine import (
+        get_xp_summary, get_xp_history, get_active_surges,
+    )
+    summary = await get_xp_summary()
+    history = await get_xp_history(limit=10)
+    surges = await get_active_surges()
+    return {"summary": summary, "history": history, "active_surges": surges}
+
+
+@router.get("/villain/surges")
+async def villain_surges():
+    """Get active power surges."""
+    from app.services.villain_challenge.xp_engine import get_active_surges
+    return {"surges": await get_active_surges()}
+
+
+@router.post("/villain/sync")
+async def villain_sync():
+    """Manually trigger objective progress sync from fitness data."""
+    from app.services.villain_challenge.scheduler import _sync_objective_progress
+    await _sync_objective_progress()
+    from app.services.villain_challenge.villain_engine import get_active_challenge
+    return await get_active_challenge()

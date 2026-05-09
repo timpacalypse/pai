@@ -609,3 +609,131 @@ CREATE TABLE IF NOT EXISTS fitness_strength (
     UNIQUE(platform, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fitness_strength_start ON fitness_strength (start_time DESC);
+
+-- ────────────────────────────────────────────
+-- VILLAIN CHALLENGE SYSTEM
+-- ────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS hero_profile (
+    id SERIAL PRIMARY KEY,
+    hero_name VARCHAR(100) DEFAULT 'Recruit',
+    archetype VARCHAR(100) DEFAULT 'Unclassified',
+    archetype_detail TEXT DEFAULT '',
+    tier VARCHAR(50) DEFAULT 'Street Level',
+    total_xp INTEGER DEFAULT 0,
+    level INTEGER DEFAULT 1,
+    power_level INTEGER DEFAULT 0,
+    titles TEXT[] DEFAULT '{}',
+    badges TEXT[] DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hero_domain_scores (
+    id SERIAL PRIMARY KEY,
+    domain VARCHAR(50) NOT NULL UNIQUE,
+    score REAL DEFAULT 0,
+    trend VARCHAR(20) DEFAULT 'stable',
+    last_value REAL DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS villain_challenges (
+    id SERIAL PRIMARY KEY,
+    villain_id VARCHAR(100) NOT NULL,
+    villain_name VARCHAR(200) NOT NULL,
+    week_start DATE NOT NULL,
+    week_end DATE NOT NULL,
+    difficulty_rating REAL DEFAULT 50,
+    villain_hci REAL DEFAULT 50,
+    status VARCHAR(30) DEFAULT 'active',
+    battle_score REAL DEFAULT 0,
+    outcome VARCHAR(50) DEFAULT '',
+    xp_awarded INTEGER DEFAULT 0,
+    narrative_tone VARCHAR(50) DEFAULT 'shield_tactical',
+    domain_focus TEXT[] DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(week_start)
+);
+
+CREATE TABLE IF NOT EXISTS challenge_objectives (
+    id SERIAL PRIMARY KEY,
+    challenge_id INTEGER REFERENCES villain_challenges(id) ON DELETE CASCADE,
+    description TEXT NOT NULL,
+    objective_type VARCHAR(50) NOT NULL,
+    target_value REAL NOT NULL,
+    current_value REAL DEFAULT 0,
+    completed BOOLEAN DEFAULT FALSE,
+    domain VARCHAR(50) DEFAULT '',
+    weight REAL DEFAULT 1.0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_challenge_obj_challenge ON challenge_objectives (challenge_id);
+
+CREATE TABLE IF NOT EXISTS battle_log (
+    id SERIAL PRIMARY KEY,
+    villain_id VARCHAR(100) NOT NULL,
+    villain_name VARCHAR(200) NOT NULL,
+    challenge_id INTEGER REFERENCES villain_challenges(id),
+    battle_date DATE NOT NULL,
+    battle_score REAL DEFAULT 0,
+    outcome VARCHAR(50) NOT NULL,
+    hero_hci REAL DEFAULT 0,
+    villain_hci REAL DEFAULT 0,
+    narrative TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_battle_log_date ON battle_log (battle_date DESC);
+
+CREATE TABLE IF NOT EXISTS nemesis_tracker (
+    id SERIAL PRIMARY KEY,
+    villain_id VARCHAR(100) NOT NULL UNIQUE,
+    villain_name VARCHAR(200) NOT NULL,
+    losses INTEGER DEFAULT 0,
+    wins INTEGER DEFAULT 0,
+    is_nemesis BOOLEAN DEFAULT FALSE,
+    nemesis_since TIMESTAMP WITH TIME ZONE,
+    debuff_active BOOLEAN DEFAULT FALSE,
+    debuff_expires TIMESTAMP WITH TIME ZONE,
+    last_encounter DATE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS xp_ledger (
+    id SERIAL PRIMARY KEY,
+    amount INTEGER NOT NULL,
+    reason VARCHAR(200) NOT NULL,
+    category VARCHAR(50) DEFAULT 'general',
+    challenge_id INTEGER REFERENCES villain_challenges(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_xp_ledger_date ON xp_ledger (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS power_surges (
+    id SERIAL PRIMARY KEY,
+    surge_name VARCHAR(200) NOT NULL,
+    surge_type VARCHAR(100) NOT NULL,
+    xp_multiplier REAL DEFAULT 1.0,
+    battle_bonus REAL DEFAULT 0,
+    activated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    trigger_reason TEXT DEFAULT '',
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS daily_checkins (
+    id SERIAL PRIMARY KEY,
+    checkin_date DATE NOT NULL UNIQUE,
+    body_weight REAL,
+    body_fat_pct REAL,
+    soreness_level INTEGER DEFAULT 0,
+    soreness_notes TEXT DEFAULT '',
+    injury_notes TEXT DEFAULT '',
+    nutrition_adherence INTEGER DEFAULT 0,
+    protein_target_hit BOOLEAN DEFAULT FALSE,
+    mobility_done BOOLEAN DEFAULT FALSE,
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_daily_checkins_date ON daily_checkins (checkin_date DESC);

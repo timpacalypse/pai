@@ -770,6 +770,110 @@ def register_all_skills():
         category="personal",
     ))
 
+    # ── Villain Challenge skills ──
+
+    async def _villain_status_read(message, http_client=None):
+        from app.services.villain_challenge.hero_engine import get_hero_profile
+        from app.services.villain_challenge.villain_engine import get_active_challenge
+        from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+        from app.services.villain_challenge.narrative import format_hero_status
+
+        hero_data = await get_hero_profile()
+        challenge = await get_active_challenge()
+        battle_status = None
+        if challenge:
+            battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+        return await format_hero_status(hero_data, challenge, battle_status)
+
+    async def _villain_checkin_write(message, http_client=None):
+        from app.services.villain_challenge.xp_engine import award_xp
+        from app.core.database import async_session as db_session
+        from sqlalchemy import text as sql_text
+
+        # Parse basic check-in from chat message
+        async with db_session() as session:
+            await session.execute(sql_text("""
+                INSERT INTO daily_checkins (checkin_date)
+                VALUES (CURRENT_DATE)
+                ON CONFLICT (checkin_date) DO NOTHING
+            """))
+            await session.commit()
+
+        xp = await award_xp(25, "daily_checkin", category="checkin")
+        return f"Check-in logged! +{xp['awarded']} XP (Total: {xp['total_xp']})"
+
+    register_skill(Skill(
+        id="villain_challenge",
+        name="Villain Challenge",
+        description="X-Men themed fitness challenge system — hero status, HCI score, current villain battle, daily check-ins, battle probability, XP and power surges",
+        examples=[
+            "hero status", "villain challenge", "what's my HCI",
+            "who am I fighting this week", "battle status",
+            "check in", "daily check-in", "how's the battle going",
+            "am I winning", "villain update", "my power level",
+            "XP status", "power surges", "nemesis list",
+        ],
+        read_handler=_villain_status_read,
+        write_handler=_villain_checkin_write,
+        category="personal",
+    ))
+
+    async def _villain_battle_read(message, http_client=None):
+        from app.services.villain_challenge.villain_engine import get_active_challenge
+        from app.services.villain_challenge.hero_engine import get_hero_profile
+        from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+        from app.services.villain_challenge.narrative import generate_daily_update
+
+        challenge = await get_active_challenge()
+        if not challenge:
+            return "No active villain challenge. A new one starts Monday."
+
+        hero_data = await get_hero_profile()
+        battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+        tone = challenge.get("narrative_tone", "shield_tactical")
+        narrative = await generate_daily_update(battle_status, challenge, hero_data, tone=tone)
+        return narrative
+
+    register_skill(Skill(
+        id="villain_battle",
+        name="Villain Battle Status",
+        description="Get a dramatic narrative battle update for the current X-Men villain challenge — how the fight is going, what to do next",
+        examples=[
+            "battle update", "how's the fight", "give me a battle report",
+            "am I beating the villain", "mission status", "tactical update",
+        ],
+        read_handler=_villain_battle_read,
+        write_handler=None,
+        category="personal",
+    ))
+
+    async def _villain_history_read(message, http_client=None):
+        from app.services.villain_challenge.battle_system import get_battle_history
+        from app.services.villain_challenge.xp_engine import get_xp_summary
+
+        battles = await get_battle_history(limit=5)
+        xp = await get_xp_summary()
+
+        lines = [f"**Level {xp['level']}** — {xp['title']} | {xp['total_xp']} XP"]
+        for b in battles:
+            lines.append(f"- {b['villain_name']}: {b['outcome']} (Score: {b['battle_score']:.0f})")
+        if not battles:
+            lines.append("No battles fought yet.")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="villain_history",
+        name="Battle History",
+        description="View past villain battles, win/loss record, and XP progression",
+        examples=[
+            "battle history", "past fights", "who have I beaten",
+            "win loss record", "villain defeats",
+        ],
+        read_handler=_villain_history_read,
+        write_handler=None,
+        category="personal",
+    ))
+
     logger.info("all_skills_registered", extra={"count": len(_REGISTRY)})
 
 

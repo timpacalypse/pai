@@ -27,6 +27,7 @@ async def build_daily_briefing(http_client: httpx.AsyncClient | None = None) -> 
     agenda = await _get_today_agenda()
     email_recs = await _get_email_recommendations(http_client)
     workout = await _get_todays_workout()
+    villain = await _get_villain_challenge_status()
 
     return {
         "weather": weather,
@@ -34,6 +35,7 @@ async def build_daily_briefing(http_client: httpx.AsyncClient | None = None) -> 
         "agenda": agenda,
         "email_recommendations": email_recs,
         "workout": workout,
+        "villain_challenge": villain,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -195,6 +197,87 @@ async def _get_todays_workout() -> dict:
         return {"day": "", "scheduled": [], "completed": []}
 
 
+async def _get_villain_challenge_status() -> dict:
+    """Get current villain challenge status for the briefing."""
+    today = datetime.now(timezone.utc)
+    is_monday = today.weekday() == 0
+
+    result = {
+        "is_monday": is_monday,
+        "has_challenge": False,
+        "hero": None,
+        "challenge": None,
+        "battle_status": None,
+        "weekly_assignment": None,
+    }
+
+    try:
+        from app.services.villain_challenge.hero_engine import get_hero_profile
+        from app.services.villain_challenge.villain_engine import get_active_challenge
+        from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+        from app.services.villain_challenge.xp_engine import get_active_surges
+
+        hero_data = await get_hero_profile()
+        result["hero"] = {
+            "hci": hero_data.get("hci", 0),
+            "tier": hero_data.get("tier", "Street Level"),
+            "archetype": hero_data.get("archetype", {}).get("name", "Recruit"),
+            "level": hero_data.get("profile", {}).get("level", 1),
+            "total_xp": hero_data.get("profile", {}).get("total_xp", 0),
+            "domain_scores": hero_data.get("domain_scores", {}),
+            "weakest": hero_data.get("weakest_domain", {}),
+            "strongest": hero_data.get("strongest_domain", {}),
+        }
+
+        challenge = await get_active_challenge()
+        if challenge:
+            result["has_challenge"] = True
+            result["challenge"] = {
+                "villain_name": challenge.get("villain_name", ""),
+                "villain_id": challenge.get("villain_id", ""),
+                "difficulty": challenge.get("difficulty_rating", 0),
+                "villain_hci": challenge.get("villain_hci", 0),
+                "domain_focus": challenge.get("domain_focus", []),
+                "week_start": str(challenge.get("week_start", "")),
+                "week_end": str(challenge.get("week_end", "")),
+                "objectives": [
+                    {
+                        "description": o.get("description", ""),
+                        "current": o.get("current_value", 0),
+                        "target": o.get("target_value", 0),
+                        "completed": o.get("completed", False),
+                        "domain": o.get("domain", ""),
+                    }
+                    for o in challenge.get("objectives", [])
+                ],
+                "completion_pct": challenge.get("completion_pct", 0),
+            }
+
+            battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+            result["battle_status"] = battle_status
+
+            # On Monday, flag this as the weekly assignment
+            if is_monday:
+                from app.services.villain_challenge.models import get_villain
+                villain = get_villain(challenge.get("villain_id", ""))
+                result["weekly_assignment"] = {
+                    "villain_name": challenge.get("villain_name", ""),
+                    "tier": villain.tier if villain else "",
+                    "description": villain.description if villain else "",
+                    "weakness": villain.weakness_text if villain else "",
+                    "domain_focus": challenge.get("domain_focus", []),
+                    "objectives": result["challenge"]["objectives"],
+                }
+
+        surges = await get_active_surges()
+        result["active_surges"] = surges
+
+    except Exception as e:
+        logger.warning("villain_briefing_fetch_failed", extra={"error": str(e)})
+
+    return result
+
+
 async def _get_email_recommendations(http_client: httpx.AsyncClient) -> dict:
     """Read Gmail inbox and use LLM to suggest scheduling actions."""
     inbox = _read_gmail_inbox(max_emails=15)
@@ -252,6 +335,7 @@ def build_briefing_html(briefing: dict) -> str:
     agenda = briefing.get("agenda", {})
     email_recs = briefing.get("email_recommendations", {})
     workout = briefing.get("workout", {})
+    villain = briefing.get("villain_challenge", {})
 
     # Weather section
     if weather.get("error"):
@@ -416,6 +500,149 @@ def build_briefing_html(briefing: dict) -> str:
     else:
         recs_html = f'<p style="color:#8b8fa8;">No actionable items found ({scanned} emails scanned).</p>'
 
+    # Villain Challenge section
+    villain_html = ""
+    if villain.get("hero"):
+        hero = villain["hero"]
+        status_colors = {
+            "Dominating": "#4caf50", "Advantage": "#8bc34a",
+            "Contested": "#ff9800", "Danger": "#f44336", "Critical": "#d32f2f",
+        }
+
+        # Hero status bar
+        domain_scores = hero.get("domain_scores", {})
+        domain_bars = ""
+        for domain, score in sorted(domain_scores.items(), key=lambda x: x[1], reverse=True):
+            bar_width = max(2, int(score))
+            bar_color = "#4caf50" if score >= 60 else "#ff9800" if score >= 40 else "#f44336"
+            label = domain.replace("_", " ").title()
+            if len(label) > 12:
+                label = label[:3].upper()
+            domain_bars += (
+                f'<div style="display:flex;align-items:center;margin:3px 0;">'
+                f'<span style="color:#8b8fa8;font-size:11px;width:90px;">{label}</span>'
+                f'<div style="flex:1;background:#222539;border-radius:4px;height:14px;margin:0 8px;">'
+                f'<div style="width:{bar_width}%;background:{bar_color};border-radius:4px;'
+                f'height:14px;"></div></div>'
+                f'<span style="color:#e4e6f0;font-size:11px;width:30px;text-align:right;">'
+                f'{score:.0f}</span></div>'
+            )
+
+        hero_html = (
+            f'<div style="background:#222539;border-radius:8px;padding:14px;margin-bottom:12px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div>'
+            f'<span style="color:#4f8ef7;font-size:16px;font-weight:700;">{hero["archetype"]}</span>'
+            f'<span style="color:#8b8fa8;font-size:13px;"> · {hero["tier"]}</span>'
+            f'</div>'
+            f'<div style="text-align:right;">'
+            f'<span style="color:#e4e6f0;font-size:14px;font-weight:600;">HCI {hero["hci"]:.1f}</span>'
+            f'<span style="color:#8b8fa8;font-size:12px;"> · Lv {hero["level"]}'
+            f' · {hero["total_xp"]} XP</span>'
+            f'</div></div>'
+            f'<div style="margin-top:10px;">{domain_bars}</div>'
+            f'</div>'
+        )
+
+        # Challenge progress (daily)
+        challenge_html = ""
+        if villain.get("has_challenge"):
+            ch = villain["challenge"]
+            bs = villain.get("battle_status", {})
+            status = bs.get("status", "Unknown")
+            status_color = status_colors.get(status, "#ff9800")
+            prob = bs.get("probability", 0)
+            days_left = bs.get("days_remaining", 0)
+            advantage = bs.get("advantage_text", "")
+            actions = bs.get("recommended_actions", [])
+
+            # Objectives progress
+            obj_rows = ""
+            for o in ch.get("objectives", []):
+                done = o.get("completed", False)
+                pct = min(100, int((o["current"] / o["target"]) * 100)) if o["target"] > 0 else 0
+                check = "✅" if done else "⬜"
+                pct_color = "#4caf50" if done else "#4f8ef7"
+                obj_rows += (
+                    f'<div style="padding:4px 0;color:#e4e6f0;font-size:13px;">'
+                    f'{check} {o["description"]}'
+                    f'<span style="color:{pct_color};font-size:12px;float:right;">'
+                    f'{o["current"]:.0f}/{o["target"]:.0f}</span></div>'
+                )
+
+            # Action items
+            action_html = ""
+            if actions:
+                action_items = "".join(
+                    f'<div style="padding:2px 0;color:#b0b3c8;font-size:12px;">→ {a}</div>'
+                    for a in actions[:3]
+                )
+                action_html = (
+                    f'<div style="margin-top:8px;padding:8px;background:#1a1d2e;border-radius:6px;">'
+                    f'<div style="color:#ff9800;font-size:11px;font-weight:600;'
+                    f'text-transform:uppercase;margin-bottom:4px;">Recommended Actions</div>'
+                    f'{action_items}</div>'
+                )
+
+            challenge_html = (
+                f'<div style="background:#222539;border-radius:8px;padding:14px;margin-bottom:12px;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'margin-bottom:10px;">'
+                f'<div>'
+                f'<span style="color:#e4e6f0;font-size:15px;font-weight:600;">'
+                f'vs. {ch["villain_name"]}</span>'
+                f'<span style="color:#8b8fa8;font-size:12px;">'
+                f' · HCI {ch["villain_hci"]:.0f}</span>'
+                f'</div>'
+                f'<span style="background:{status_color};color:#fff;padding:3px 10px;'
+                f'border-radius:4px;font-size:12px;font-weight:600;">{status}</span>'
+                f'</div>'
+                f'<div style="color:#8b8fa8;font-size:12px;margin-bottom:8px;">'
+                f'{days_left} days remaining · {ch["completion_pct"]:.0f}% complete'
+                f'{" · " + advantage if advantage else ""}</div>'
+                f'{obj_rows}{action_html}'
+                f'</div>'
+            )
+
+        # Monday weekly assignment
+        weekly_html = ""
+        if villain.get("is_monday") and villain.get("weekly_assignment"):
+            wa = villain["weekly_assignment"]
+            focus = ", ".join(d.replace("_", " ").title() for d in wa.get("domain_focus", []))
+            weekly_html = (
+                f'<div style="background:#1a2a1a;border:1px solid #2d5a2d;border-radius:8px;'
+                f'padding:14px;margin-bottom:12px;">'
+                f'<div style="color:#4caf50;font-size:13px;font-weight:700;'
+                f'text-transform:uppercase;margin-bottom:6px;">'
+                f'⚔ New Weekly Challenge Assigned</div>'
+                f'<div style="color:#e4e6f0;font-size:16px;font-weight:600;margin-bottom:4px;">'
+                f'{wa["villain_name"]}'
+                f'<span style="color:#8b8fa8;font-size:12px;"> · {wa["tier"]}</span></div>'
+                f'<div style="color:#b0b3c8;font-size:13px;margin-bottom:6px;">'
+                f'{wa["description"]}</div>'
+                f'<div style="color:#ff9800;font-size:12px;margin-bottom:6px;">'
+                f'Weakness: {wa["weakness"]}</div>'
+                f'<div style="color:#8b8fa8;font-size:12px;margin-bottom:8px;">'
+                f'Targeting: {focus}</div>'
+                f'</div>'
+            )
+
+        # Surges
+        surge_html = ""
+        surges = villain.get("active_surges", [])
+        if surges:
+            surge_items = "".join(
+                f'<span style="background:#4a148c;color:#ce93d8;padding:3px 8px;'
+                f'border-radius:4px;font-size:11px;margin-right:6px;">'
+                f'⚡ {s["surge_name"]} ({s["xp_multiplier"]}x XP)</span>'
+                for s in surges
+            )
+            surge_html = f'<div style="margin-bottom:12px;">{surge_items}</div>'
+
+        villain_html = f'{hero_html}{surge_html}{weekly_html}{challenge_html}'
+    else:
+        villain_html = '<p style="color:#8b8fa8;">Villain challenge system initializing...</p>'
+
     return f"""
     <html>
     <body style="background:#0f1117;font-family:'Segoe UI',system-ui,sans-serif;margin:0;padding:20px;">
@@ -443,7 +670,13 @@ def build_briefing_html(briefing: dict) -> str:
 
                 <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
                            border-bottom:1px solid #2a2d42;padding-bottom:8px;">
-                    �📰 Top Articles
+                    ⚔ Villain Challenge
+                </h2>
+                {villain_html}
+
+                <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
+                           border-bottom:1px solid #2a2d42;padding-bottom:8px;">
+                    📰 Top Articles
                 </h2>
                 {articles_html}
 
@@ -509,6 +742,54 @@ def build_briefing_text(briefing: dict) -> str:
             lines.append(f"  ✓ {c['activity']} — {c['duration_minutes']} min")
     lines.append("")
 
+    # Villain Challenge
+    villain = briefing.get("villain_challenge", {})
+    if villain.get("hero"):
+        hero = villain["hero"]
+        lines.append("VILLAIN CHALLENGE:")
+        lines.append(f"  {hero['archetype']} · {hero['tier']} · HCI {hero['hci']:.1f}"
+                     f" · Lv {hero['level']} · {hero['total_xp']} XP")
+
+        ds = hero.get("domain_scores", {})
+        abbr = {"strength": "STR", "conditioning": "CND", "recovery": "REC",
+                "consistency": "CST", "physique": "PHY", "nutrition_adherence": "NUT", "mobility": "MOB"}
+        domain_line = " | ".join(f"{abbr.get(d, d[:3].upper())}: {s:.0f}" for d, s in sorted(ds.items(), key=lambda x: -x[1]))
+        lines.append(f"  Domains: {domain_line}")
+
+        surges = villain.get("active_surges", [])
+        if surges:
+            surge_names = ", ".join(f"{s['surge_name']} ({s['xp_multiplier']}x)" for s in surges)
+            lines.append(f"  Active Surges: {surge_names}")
+
+        if villain.get("is_monday") and villain.get("weekly_assignment"):
+            wa = villain["weekly_assignment"]
+            focus = ", ".join(d.replace("_", " ").title() for d in wa.get("domain_focus", []))
+            lines.append("")
+            lines.append(f"  ⚔ NEW WEEKLY CHALLENGE: {wa['villain_name']} ({wa['tier']})")
+            lines.append(f"  Intel: {wa['description']}")
+            lines.append(f"  Weakness: {wa['weakness']}")
+            lines.append(f"  Targeting: {focus}")
+            lines.append("  Objectives:")
+            for o in wa.get("objectives", []):
+                lines.append(f"    • {o['description']} (target: {o['target']:.0f})")
+
+        if villain.get("has_challenge"):
+            ch = villain["challenge"]
+            bs = villain.get("battle_status", {})
+            status = bs.get("status", "Unknown")
+            days_left = bs.get("days_remaining", 0)
+            lines.append("")
+            lines.append(f"  vs. {ch['villain_name']} — {status} — "
+                         f"{days_left} days left — {ch['completion_pct']:.0f}% complete")
+            for o in ch.get("objectives", []):
+                check = "✓" if o["completed"] else "•"
+                lines.append(f"    {check} {o['description']} ({o['current']:.0f}/{o['target']:.0f})")
+            if bs.get("advantage_text"):
+                lines.append(f"  Intel: {bs['advantage_text']}")
+            for a in bs.get("recommended_actions", [])[:3]:
+                lines.append(f"    → {a}")
+    lines.append("")
+
     # Articles
     articles = briefing.get("articles", [])
     lines.append(f"TOP ARTICLES ({len(articles)}):")
@@ -560,8 +841,13 @@ async def send_daily_briefing(http_client: httpx.AsyncClient | None = None) -> b
     html_body = build_briefing_html(briefing)
     text_body = build_briefing_text(briefing)
 
-    now = datetime.now(timezone.utc).strftime("%B %d, %Y")
-    subject = f"PAI Daily Briefing — {now}"
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.strftime("%B %d, %Y")
+    villain = briefing.get("villain_challenge", {})
+    if villain.get("is_monday"):
+        subject = f"⚔ PAI Weekly Mission Briefing — {now}"
+    else:
+        subject = f"PAI Daily Briefing — {now}"
 
     try:
         msg = MIMEMultipart("alternative")
