@@ -787,7 +787,12 @@ def register_all_skills():
 
     async def _villain_checkin_write(message, http_client=None):
         from app.services.villain_challenge.xp_engine import award_xp
+        from app.services.villain_challenge.hero_engine import get_hero_profile
+        from app.services.villain_challenge.villain_engine import get_active_challenge
+        from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
+        from app.services.villain_challenge.scheduler import _sync_objective_progress
         from app.core.database import async_session as db_session
+        from app.services.ollama_service import generate
         from sqlalchemy import text as sql_text
         import re
 
@@ -828,16 +833,82 @@ def register_all_skills():
 
         xp = await award_xp(25, "daily_checkin", category="checkin")
 
-        parts = [f"Check-in logged! +{xp['awarded']} XP (Total: {xp['total_xp']})"]
+        # Sync objective progress after check-in
+        try:
+            await _sync_objective_progress()
+        except Exception:
+            pass
+
+        # Build check-in summary
+        logged = []
         if weight:
-            parts.append(f"Weight: {weight} lbs")
+            logged.append(f"Weight: {weight} lbs")
         if bf:
-            parts.append(f"Body fat: {bf}%")
+            logged.append(f"Body fat: {bf}%")
         if mobility:
-            parts.append("Mobility: done")
+            logged.append("Mobility: done")
         if nutrition:
-            parts.append(f"Nutrition adherence: {nutrition}%")
-        return " | ".join(parts)
+            logged.append(f"Nutrition: {nutrition}%")
+        checkin_summary = ", ".join(logged) if logged else "Daily check-in"
+
+        # Get battle context for narrative
+        hero_data = await get_hero_profile()
+        challenge = await get_active_challenge()
+
+        if not challenge:
+            return f"**Check-in logged!** +{xp['awarded']} XP (Total: {xp['total_xp']})\n{checkin_summary}\n\nNo active villain challenge — a new one starts Monday."
+
+        battle_status = await calculate_daily_battle_probability(challenge, hero_data)
+        status = battle_status.get("status", "Contested")
+        days_left = battle_status.get("days_remaining", 0)
+        completed = battle_status.get("completed_objectives", 0)
+        total = battle_status.get("total_objectives", 0)
+        villain = challenge.get("villain_name", "Unknown")
+        actions = battle_status.get("recommended_actions", [])
+        actions_text = "\n".join(f"  - {a}" for a in actions[:3])
+
+        # Build objective progress lines
+        obj_lines = []
+        for o in challenge.get("objectives", []):
+            mark = "x" if o.get("completed") else " "
+            obj_lines.append(f"[{mark}] {o['description']} ({o.get('current_value', 0):.0f}/{o['target_value']:.0f})")
+        obj_text = "\n".join(obj_lines)
+
+        prompt = f"""You are a tactical X-Men mission handler giving a battle status update after the hero just checked in.
+
+CHECK-IN DATA:
+{checkin_summary}
+XP Earned: +{xp['awarded']} (Total: {xp['total_xp']})
+
+BATTLE SITUATION:
+- Villain: {villain}
+- Status: {status}
+- Days Remaining: {days_left}
+- Objectives: {completed}/{total} completed
+{obj_text}
+- Recommended Actions:
+{actions_text}
+
+HERO PROFILE:
+- Archetype: {hero_data.get('archetype', {}).get('name', 'Recruit')}
+- Tier: {hero_data.get('tier', 'Street Level')}
+- HCI: {hero_data.get('hci', 0):.1f}
+- Level: {hero_data.get('level', 1)}
+
+Write a brief response (under 120 words) that:
+1. Acknowledges the check-in data (weight/bf/mobility/nutrition)
+2. Connects it to the current battle against {villain}
+3. References the battle status ({status}) with appropriate urgency
+4. Mentions 1-2 specific next actions from the recommended list
+5. Use a tactical, motivating tone — like a war room briefing
+Do NOT use hashtags or emoji. Do NOT be generic."""
+
+        narrative = await generate(
+            prompt=prompt,
+            system_prompt="You are a tactical X-Men mission handler. Brief, punchy battle updates only.",
+            model=None,
+        )
+        return narrative
 
     register_skill(Skill(
         id="villain_challenge",
