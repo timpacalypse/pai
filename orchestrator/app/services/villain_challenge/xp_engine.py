@@ -253,12 +253,16 @@ async def check_and_activate_surges() -> list[dict]:
         streak_30 = r.scalar() or 0
 
         # Check elite sleep week (5+ nights above 80% sleep performance)
-        r = await session.execute(text("""
-            SELECT COUNT(*) FROM whoop_sleep
-            WHERE start_time >= NOW() - INTERVAL '7 days'
-              AND sleep_performance >= 80
-        """))
-        elite_sleep = r.scalar() or 0
+        try:
+            r = await session.execute(text("""
+                SELECT COUNT(*) FROM whoop_sleep
+                WHERE start_time >= NOW() - INTERVAL '7 days'
+                  AND sleep_performance >= 80
+            """))
+            elite_sleep = r.scalar() or 0
+        except Exception:
+            await session.rollback()
+            elite_sleep = 0
 
         # Check perfect nutrition adherence (7/7 days)
         r = await session.execute(text("""

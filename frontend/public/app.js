@@ -278,8 +278,7 @@ async function handleSend() {
     try {
         // Chat mode uses streaming
         if (state.mode === 'chat') {
-            loadingEl.remove();
-            await sendChatStream(text);
+            await sendChatStream(text, loadingEl);
         } else {
             let data;
             switch (state.mode) {
@@ -336,7 +335,7 @@ async function handleSend() {
     inputEl.focus();
 }
 
-async function sendChatStream(message) {
+async function sendChatStream(message, loadingEl) {
     const body = {
         message,
         conversation_id: state.conversationId,
@@ -349,7 +348,13 @@ async function sendChatStream(message) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
-    if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+    if (!resp.ok) {
+        if (loadingEl) loadingEl.remove();
+        throw new Error(`${resp.status}: ${await resp.text()}`);
+    }
+
+    // Remove loading dots now that stream has connected
+    if (loadingEl) loadingEl.remove();
 
     // Create a message div for streaming into
     const div = document.createElement('div');

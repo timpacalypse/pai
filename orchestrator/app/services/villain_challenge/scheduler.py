@@ -45,8 +45,8 @@ async def run_villain_cycle():
     if surges:
         logger.info("surges_activated", extra={"count": len(surges)})
 
-    # Monday morning (6-10 AM UTC): Create new weekly challenge
-    if weekday == 0 and 6 <= hour <= 10:
+    # Monday (any hour): Create new weekly challenge if needed
+    if weekday == 0:
         await _maybe_create_weekly_challenge()
 
     # Sunday evening (18-22 UTC): Resolve weekly battle
@@ -116,20 +116,27 @@ async def _sync_objective_progress():
     if isinstance(week_start, str):
         week_start = date.fromisoformat(week_start)
 
+    ws_ts = datetime.combine(week_start, datetime.min.time())
+
+    async def _safe_count(session, sql, params):
+        """Query that returns 0 if the table doesn't exist yet."""
+        try:
+            r = await session.execute(text(sql), params)
+            return r.scalar() or 0
+        except Exception:
+            await session.rollback()
+            return 0
+
     async with async_session() as session:
-        # Count Tonal workouts this week
-        r = await session.execute(text("""
+        tonal_count = await _safe_count(session, """
             SELECT COUNT(*) FROM tonal_workouts
             WHERE start_time >= :ws::timestamp
-        """), {"ws": datetime.combine(week_start, datetime.min.time())})
-        tonal_count = r.scalar() or 0
+        """, {"ws": ws_ts})
 
-        # Count Peloton rides this week
-        r = await session.execute(text("""
+        peloton_count = await _safe_count(session, """
             SELECT COUNT(*) FROM peloton_workouts
             WHERE start_time >= :ws::timestamp
-        """), {"ws": datetime.combine(week_start, datetime.min.time())})
-        peloton_count = r.scalar() or 0
+        """, {"ws": ws_ts})
 
         # Count daily check-ins this week
         r = await session.execute(text("""
@@ -138,21 +145,17 @@ async def _sync_objective_progress():
         """), {"ws": week_start})
         checkin_count = r.scalar() or 0
 
-        # Count sleep targets hit this week
-        r = await session.execute(text("""
+        sleep_target_count = await _safe_count(session, """
             SELECT COUNT(*) FROM whoop_sleep
             WHERE start_time >= :ws::timestamp
               AND sleep_performance >= 60
-        """), {"ws": datetime.combine(week_start, datetime.min.time())})
-        sleep_target_count = r.scalar() or 0
+        """, {"ws": ws_ts})
 
-        # Count recovery targets hit this week
-        r = await session.execute(text("""
+        recovery_target_count = await _safe_count(session, """
             SELECT COUNT(*) FROM whoop_recovery
             WHERE created_at >= :ws::timestamp
               AND recovery_score >= 60
-        """), {"ws": datetime.combine(week_start, datetime.min.time())})
-        recovery_target_count = r.scalar() or 0
+        """, {"ws": ws_ts})
 
         # Count nutrition target days
         r = await session.execute(text("""
@@ -178,29 +181,29 @@ async def _sync_objective_progress():
         """), {"ws": week_start})
         weight_log_count = r.scalar() or 0
 
-    # Map objective types to absolute current values
-    progress_map = {
-        "tonal_workouts": tonal_count,
-        "peloton_rides": peloton_count,
-        "checkin_streak": checkin_count,
-        "sleep_target": sleep_target_count,
-        "recovery_target": recovery_target_count,
-        "nutrition_target": nutrition_days,
-        "mobility_sessions": mobility_count,
-        "weight_logs": weight_log_count,
-    }
+        # Map objective types to absolute current values
+        progress_map = {
+            "tonal_workouts": tonal_count,
+            "peloton_rides": peloton_count,
+            "checkin_streak": checkin_count,
+            "sleep_target": sleep_target_count,
+            "recovery_target": recovery_target_count,
+            "nutrition_target": nutrition_days,
+            "mobility_sessions": mobility_count,
+            "weight_logs": weight_log_count,
+        }
 
-    # Set absolute values (not increments) for each objective
-    for obj in challenge.get("objectives", []):
-        obj_type = obj.get("objective_type")
-        if obj_type in progress_map and not obj.get("completed"):
-            new_val = min(obj["target_value"], progress_map[obj_type])
-            completed = new_val >= obj["target_value"]
-            if new_val != obj.get("current_value", 0):
-                await session.execute(text("""
-                    UPDATE challenge_objectives
-                    SET current_value = :val, completed = :done
-                    WHERE id = :id
-                """), {"val": new_val, "done": completed, "id": obj["id"]})
+        # Set absolute values (not increments) for each objective
+        for obj in challenge.get("objectives", []):
+            obj_type = obj.get("objective_type")
+            if obj_type in progress_map and not obj.get("completed"):
+                new_val = min(obj["target_value"], progress_map[obj_type])
+                completed = new_val >= obj["target_value"]
+                if new_val != obj.get("current_value", 0):
+                    await session.execute(text("""
+                        UPDATE challenge_objectives
+                        SET current_value = :val, completed = :done
+                        WHERE id = :id
+                    """), {"val": new_val, "done": completed, "id": obj["id"]})
 
-    await session.commit()
+        await session.commit()
