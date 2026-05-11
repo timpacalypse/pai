@@ -523,8 +523,8 @@ function addSystemMessage(text) {
 
 function addLoading() {
     const div = document.createElement('div');
-    div.className = 'message ai';
-    div.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+    div.className = 'message ai loading-message';
+    div.innerHTML = '<div class="loading-indicator"><span class="loading-text">Thinking</span><div class="loading-dots"><span></span><span></span><span></span></div></div>';
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return div;

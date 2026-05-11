@@ -581,17 +581,33 @@ select:focus, input[type="text"]:focus {
 .recipe-delete-btn:hover { background: rgba(244, 67, 54, 0.15); }
 
 /* Loading */
-.loading-dots {
-    display: inline-flex;
-    gap: 4px;
+.loading-message {
+    animation: pulse-bg 2s ease-in-out infinite;
+}
+
+.loading-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     padding: 8px 0;
 }
 
+.loading-text {
+    color: var(--accent);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.loading-dots {
+    display: inline-flex;
+    gap: 5px;
+}
+
 .loading-dots span {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: var(--text-muted);
+    background: var(--accent);
     animation: bounce 1.4s infinite;
 }
 
@@ -599,8 +615,13 @@ select:focus, input[type="text"]:focus {
 .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes bounce {
-    0%, 80%, 100% { transform: scale(0); }
-    40% { transform: scale(1); }
+    0%, 80%, 100% { transform: scale(0); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pulse-bg {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
 }
 
 /* ── Input Area ── */
