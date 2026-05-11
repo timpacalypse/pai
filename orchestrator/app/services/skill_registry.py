@@ -789,18 +789,55 @@ def register_all_skills():
         from app.services.villain_challenge.xp_engine import award_xp
         from app.core.database import async_session as db_session
         from sqlalchemy import text as sql_text
+        import re
 
-        # Parse basic check-in from chat message
+        msg = message.lower()
+
+        # Parse weight (e.g. "weight 183", "183 lbs", "weigh 183.5")
+        weight = None
+        w_match = re.search(r'(?:weight|weigh|wt)\s*([\d.]+)', msg) or re.search(r'([\d.]+)\s*(?:lbs?|pounds?)', msg)
+        if w_match:
+            weight = float(w_match.group(1))
+
+        # Parse body fat (e.g. "bf 12", "body fat 12.5", "12% bf", "12.5%")
+        bf = None
+        bf_match = re.search(r'(?:bf|body\s*fat|bodyfat)\s*([\d.]+)', msg) or re.search(r'([\d.]+)\s*%\s*(?:bf|body\s*fat|bodyfat)?', msg)
+        if bf_match:
+            bf = float(bf_match.group(1))
+
+        # Parse mobility
+        mobility = 'mobility' in msg and ('done' in msg or 'yes' in msg or 'did' in msg or 'complete' in msg)
+
+        # Parse nutrition adherence (e.g. "nutrition 80", "adherence 90")
+        nutrition = None
+        n_match = re.search(r'(?:nutrition|adherence|diet)\s*([\d]+)', msg)
+        if n_match:
+            nutrition = int(n_match.group(1))
+
         async with db_session() as session:
             await session.execute(sql_text("""
-                INSERT INTO daily_checkins (checkin_date)
-                VALUES (CURRENT_DATE)
-                ON CONFLICT (checkin_date) DO NOTHING
-            """))
+                INSERT INTO daily_checkins (checkin_date, body_weight, body_fat_pct, mobility_done, nutrition_adherence)
+                VALUES (CURRENT_DATE, :weight, :bf, :mobility, COALESCE(:nutrition, 0))
+                ON CONFLICT (checkin_date) DO UPDATE SET
+                    body_weight = COALESCE(:weight, daily_checkins.body_weight),
+                    body_fat_pct = COALESCE(:bf, daily_checkins.body_fat_pct),
+                    mobility_done = CASE WHEN :mobility THEN TRUE ELSE daily_checkins.mobility_done END,
+                    nutrition_adherence = CASE WHEN :nutrition IS NOT NULL THEN :nutrition ELSE daily_checkins.nutrition_adherence END
+            """), {"weight": weight, "bf": bf, "mobility": mobility, "nutrition": nutrition})
             await session.commit()
 
         xp = await award_xp(25, "daily_checkin", category="checkin")
-        return f"Check-in logged! +{xp['awarded']} XP (Total: {xp['total_xp']})"
+
+        parts = [f"Check-in logged! +{xp['awarded']} XP (Total: {xp['total_xp']})"]
+        if weight:
+            parts.append(f"Weight: {weight} lbs")
+        if bf:
+            parts.append(f"Body fat: {bf}%")
+        if mobility:
+            parts.append("Mobility: done")
+        if nutrition:
+            parts.append(f"Nutrition adherence: {nutrition}%")
+        return " | ".join(parts)
 
     register_skill(Skill(
         id="villain_challenge",
