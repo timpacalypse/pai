@@ -45,7 +45,7 @@ async def run_villain_cycle():
     if surges:
         logger.info("surges_activated", extra={"count": len(surges)})
 
-    # Monday (any hour): Create new weekly challenge if needed
+    # Monday: Create new weekly challenge if needed
     if weekday == 0:
         await _maybe_create_weekly_challenge()
 
@@ -118,25 +118,23 @@ async def _sync_objective_progress():
 
     ws_ts = datetime.combine(week_start, datetime.min.time())
 
-    async def _safe_count(session, sql, params):
-        """Query that returns 0 if the table doesn't exist yet."""
-        try:
-            r = await session.execute(text(sql), params)
-            return r.scalar() or 0
-        except Exception:
-            await session.rollback()
-            return 0
-
     async with async_session() as session:
-        tonal_count = await _safe_count(session, """
-            SELECT COUNT(*) FROM tonal_workouts
-            WHERE start_time >= :ws::timestamp
-        """, {"ws": ws_ts})
+        # Count Tonal strength workouts this week
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM fitness_strength
+            WHERE platform = 'tonal'
+              AND workout_type NOT IN ('ASSESSMENT', 'SCORE_HISTORY')
+              AND start_time >= CAST(:ws AS timestamp)
+        """), {"ws": ws_ts})
+        tonal_count = r.scalar() or 0
 
-        peloton_count = await _safe_count(session, """
-            SELECT COUNT(*) FROM peloton_workouts
-            WHERE start_time >= :ws::timestamp
-        """, {"ws": ws_ts})
+        # Count Peloton rides this week
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM fitness_workouts
+            WHERE platform = 'peloton'
+              AND start_time >= CAST(:ws AS timestamp)
+        """), {"ws": ws_ts})
+        peloton_count = r.scalar() or 0
 
         # Count daily check-ins this week
         r = await session.execute(text("""
@@ -145,17 +143,21 @@ async def _sync_objective_progress():
         """), {"ws": week_start})
         checkin_count = r.scalar() or 0
 
-        sleep_target_count = await _safe_count(session, """
-            SELECT COUNT(*) FROM whoop_sleep
-            WHERE start_time >= :ws::timestamp
+        # Count sleep targets hit this week
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM fitness_sleep
+            WHERE start_time >= CAST(:ws AS timestamp)
               AND sleep_performance >= 60
-        """, {"ws": ws_ts})
+        """), {"ws": ws_ts})
+        sleep_target_count = r.scalar() or 0
 
-        recovery_target_count = await _safe_count(session, """
-            SELECT COUNT(*) FROM whoop_recovery
-            WHERE created_at >= :ws::timestamp
+        # Count recovery targets hit this week
+        r = await session.execute(text("""
+            SELECT COUNT(*) FROM fitness_recovery
+            WHERE record_date >= :ws
               AND recovery_score >= 60
-        """, {"ws": ws_ts})
+        """), {"ws": week_start})
+        recovery_target_count = r.scalar() or 0
 
         # Count nutrition target days
         r = await session.execute(text("""
