@@ -810,24 +810,27 @@ def register_all_skills():
         if bf_match:
             bf = float(bf_match.group(1))
 
-        # Parse mobility
-        mobility = 'mobility' in msg and ('done' in msg or 'yes' in msg or 'did' in msg or 'complete' in msg)
+        # Parse mobility (flexible: "mobility done", "completed mobility", "did mobility", "mobility work", etc.)
+        mobility = bool(re.search(r'mobility|stretch|foam\s*roll', msg) and
+                        re.search(r'done|yes|did|complete|finished|work|session', msg))
 
-        # Parse nutrition adherence (e.g. "nutrition 80", "adherence 90")
+        # Parse nutrition adherence (e.g. "nutrition 80", "adherence 90", "met 70% nutrition", "70% of nutrition")
         nutrition = None
-        n_match = re.search(r'(?:nutrition|adherence|diet)\s*([\d]+)', msg)
+        n_match = (re.search(r'(?:nutrition|adherence|diet)\s*([\d]+)', msg)
+                   or re.search(r'([\d]+)\s*%?\s*(?:of\s+)?(?:nutrition|adherence|diet)', msg)
+                   or re.search(r'met\s+([\d]+)\s*%', msg))
         if n_match:
             nutrition = int(n_match.group(1))
 
         async with db_session() as session:
             await session.execute(sql_text("""
                 INSERT INTO daily_checkins (checkin_date, body_weight, body_fat_pct, mobility_done, nutrition_adherence)
-                VALUES (CURRENT_DATE, :weight, :bf, :mobility, COALESCE(:nutrition, 0))
+                VALUES (CURRENT_DATE, :weight, :bf, CAST(:mobility AS boolean), COALESCE(CAST(:nutrition AS integer), 0))
                 ON CONFLICT (checkin_date) DO UPDATE SET
                     body_weight = COALESCE(:weight, daily_checkins.body_weight),
                     body_fat_pct = COALESCE(:bf, daily_checkins.body_fat_pct),
-                    mobility_done = CASE WHEN :mobility THEN TRUE ELSE daily_checkins.mobility_done END,
-                    nutrition_adherence = CASE WHEN :nutrition IS NOT NULL THEN :nutrition ELSE daily_checkins.nutrition_adherence END
+                    mobility_done = CASE WHEN CAST(:mobility AS boolean) = TRUE THEN TRUE ELSE daily_checkins.mobility_done END,
+                    nutrition_adherence = CASE WHEN :nutrition IS NOT NULL THEN CAST(:nutrition AS integer) ELSE daily_checkins.nutrition_adherence END
             """), {"weight": weight, "bf": bf, "mobility": mobility, "nutrition": nutrition})
             await session.commit()
 
@@ -920,6 +923,10 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             "check in", "daily check-in", "how's the battle going",
             "am I winning", "villain update", "my power level",
             "XP status", "power surges", "nemesis list",
+            "check in weight 185 bf 12", "weight 190 body fat 15",
+            "completed mobility work", "nutrition 80",
+            "I did mobility and met 70% nutrition",
+            "log weight 200 lbs", "check in mobility done",
         ],
         read_handler=_villain_status_read,
         write_handler=_villain_checkin_write,
