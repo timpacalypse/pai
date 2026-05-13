@@ -98,6 +98,7 @@ Available skills:
   - "none" — general conversation, advice, or topics not covered above
 
 Rules:
+- IMPORTANT: "check in" messages (weight, body fat, bf, lbs, mobility done, nutrition) = execute + villain_challenge. Examples: "check in 203 lbs bf 19%", "check in weight 185 bf 12", "mobility done nutrition 80"
 - "what's on my calendar" = query + calendar. "add dentist Thursday" = execute + calendar
 - "run the threat intel digest" = execute + that process skill
 - Viewing/checking data = query. Creating/adding/running = execute
@@ -117,6 +118,19 @@ async def classify_chat_intent(
     Uses native tool calling (qwen3:4b) for reliable structured output.
     Returns dict with keys: action, skill, role, domain.
     """
+    import re
+    lower = message.lower()
+
+    # Fast pre-classifier: check-in messages always route to villain_challenge
+    if re.search(r'\bcheck\s*in\b', lower) and re.search(r'weight|lbs|bf|body\s*fat|mobility|nutrition|adherence', lower):
+        return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
+    # Also match standalone check-in phrases
+    if re.search(r'\bcheck\s*in\b', lower) and re.search(r'\d', lower):
+        return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
+    # "completed mobility" / "did mobility" / "nutrition 80" without "check in"
+    if re.search(r'(completed|did|done)\s*(mobility|stretch)', lower) or re.search(r'(mobility\s*(done|complete)|met\s+\d+%\s*(nutrition|diet))', lower):
+        return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
+
     try:
         system_prompt = _build_classifier_prompt()
         tools = _build_tool_def()
