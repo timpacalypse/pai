@@ -16,7 +16,7 @@ from app.core.database import async_session
 
 logger = logging.getLogger("pai.fitness.whoop")
 
-API_BASE = "https://api.prod.whoop.com"
+API_BASE = "https://api.prod.whoop.com/developer"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 
 
@@ -218,10 +218,12 @@ async def _sync_recovery(client: httpx.AsyncClient, headers: dict, params: dict)
 
         for r in data.get("records", []):
             score = r.get("score") or {}
+            record_date_str = r.get("created_at", "")[:10]
+            record_date = datetime.strptime(record_date_str, "%Y-%m-%d").date() if record_date_str else None
             await _upsert_recovery(
                 platform="whoop",
                 external_id=str(r.get("cycle_id", "")),
-                record_date=r.get("created_at", "")[:10],
+                record_date=record_date,
                 recovery_score=score.get("recovery_score", 0),
                 resting_heart_rate=score.get("resting_heart_rate", 0),
                 hrv_rmssd=score.get("hrv_rmssd_milli", 0),
