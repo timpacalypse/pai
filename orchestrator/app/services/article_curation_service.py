@@ -196,3 +196,58 @@ def _suggest_linkedin_angle(article: dict) -> str:
         return "Provide actionable takeaways for security practitioners"
     else:
         return "Connect this to the AI + cybersecurity convergence narrative"
+
+async def search_collected_articles(query: str, limit: int = 10) -> list[dict]:
+    """Full-text keyword search over the collected article_ledger.
+
+    Matches against title and topic using ILIKE, ranked by score.
+    Returns articles with id, title, url, source, topic, score, discovered_at.
+    """
+    from sqlalchemy import text
+    from app.core.database import async_session
+
+    words = [w.strip() for w in query.split() if len(w.strip()) > 2]
+    if not words:
+        return []
+
+    # Build WHERE clause: any keyword matches title or topic
+    conditions = " OR ".join(
+        f"(title ILIKE :w{i} OR topic ILIKE :w{i})"
+        for i in range(len(words))
+    )
+    params = {f"w{i}": f"%{w}%" for i, w in enumerate(words)}
+    params["limit"] = limit
+
+    async with async_session() as session:
+        r = await session.execute(text(f"""
+            SELECT id, title, url, source, topic, score, discovered_at
+            FROM article_ledger
+            WHERE {conditions}
+            ORDER BY score DESC, discovered_at DESC
+            LIMIT :limit
+        """), params)
+        rows = r.mappings().fetchall()
+
+    return [dict(row) for row in rows]
+
+
+async def search_collected_articles_text(query: str, limit: int = 10) -> str:
+    """Return formatted text results from searching collected articles."""
+    articles = await search_collected_articles(query, limit=limit)
+    if not articles:
+        return f"No collected articles found matching '{query}'."
+
+    lines = [
+        f"**Collected articles matching '{query}'** ({len(articles)} found):",
+        "",
+    ]
+    for i, a in enumerate(articles, 1):
+        score = float(a.get("score") or 0)
+        dt = a["discovered_at"]
+        date_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
+        lines.append(f"{i}. **{a['title']}**")
+        lines.append(f"   Source: {a['source']} | Topic: {a['topic']} | Score: {score:.2f} | {date_str}")
+        lines.append(f"   {a['url']}")
+        lines.append("")
+
+    return "\n".join(lines)

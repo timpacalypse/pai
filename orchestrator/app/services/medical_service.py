@@ -90,14 +90,54 @@ async def process_medical_input(user_text: str, http_client=None) -> dict:
 
 
 async def _resolve_member(name: str) -> int | None:
-    """Look up a family member by name (case-insensitive)."""
+    """Look up a family member by name, aliases, or fuzzy match."""
+    clean = name.strip()
     async with async_session() as session:
+        # 1. Exact name match (case-insensitive)
         result = await session.execute(
             text("SELECT id FROM family_members WHERE LOWER(name) = LOWER(:name) LIMIT 1"),
-            {"name": name.strip()},
+            {"name": clean},
         )
         row = result.scalar()
-        return row
+        if row:
+            return row
+
+        # 2. Check aliases array (case-insensitive)
+        result = await session.execute(
+            text("SELECT id FROM family_members WHERE EXISTS ("
+                 "SELECT 1 FROM unnest(aliases) alias WHERE LOWER(alias) = LOWER(:name)"
+                 ") LIMIT 1"),
+            {"name": clean},
+        )
+        row = result.scalar()
+        if row:
+            return row
+
+        # 3. Fuzzy: check if stored name is a prefix of input or input contains stored name
+        #    e.g. "Tim" matches "Timothy E. Mclaurin"
+        result = await session.execute(
+            text("SELECT id FROM family_members WHERE "
+                 "LOWER(:name) LIKE LOWER(name) || '%' "
+                 "OR LOWER(:name) LIKE '%' || LOWER(name) || '%' "
+                 "LIMIT 1"),
+            {"name": clean},
+        )
+        row = result.scalar()
+        if row:
+            return row
+
+        # 4. Check if first word of input matches a stored name
+        first_name = clean.split()[0] if clean else ""
+        if first_name and first_name.lower() != clean.lower():
+            result = await session.execute(
+                text("SELECT id FROM family_members WHERE LOWER(name) = LOWER(:name) LIMIT 1"),
+                {"name": first_name},
+            )
+            row = result.scalar()
+            if row:
+                return row
+
+        return None
 
 
 async def add_medical_record(

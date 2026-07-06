@@ -493,13 +493,71 @@ def register_all_skills():
 
     # ── Article Curation ──
     async def _article_curation_read(message, http_client=None):
-        from app.services.article_curation_service import curate_articles_text
+        from app.services.article_curation_service import (
+            curate_articles_text,
+            search_collected_articles_text,
+        )
+        import re
+        lower = message.lower()
+
+        # Detect "search my collected articles" intent
+        search_patterns = [
+            r"\b(based on|from|using|in)\b.*\b(collected|stored|my)\b.*\bartcicle",
+            r"\b(collected|stored|my)\b.*\barticles?\b",
+            r"\bfind\b.*\barticles?\b",
+            r"\barticles?\b.*\b(about|on|related to|concerning|regarding)\b",
+            r"\bsearch\b.*\barticles?\b",
+            r"\buse cases?\b.*\barticles?\b",
+            r"\barticles?\b.*\b(links?|url)\b",
+            r"\bexample.*from.*article",
+        ]
+        is_search = any(re.search(p, lower) for p in search_patterns)
+
+        # Extract query: strip command words and use remaining as search terms
+        query = re.sub(
+            r"\b(find|search|show|get|retrieve|list|give me|provide|based on|from|using|in|my|collected|stored|articles?|links?|urls?)\b",
+            " ", lower
+        ).strip()
+        query = re.sub(r"\s+", " ", query).strip()
+
+        if is_search and query and len(query) > 3:
+            return await search_collected_articles_text(query, limit=10)
+
+        # Default: curate fresh articles from web
         return await curate_articles_text()
 
     async def _article_curation_write(message, http_client=None):
-        from app.services.article_curation_service import curate_articles_text
+        from app.services.article_curation_service import (
+            curate_articles_text,
+            search_collected_articles_text,
+        )
         from app.services.ollama_service import generate as llm_generate
-        # Use LLM to extract custom topic from message
+        import re
+        lower = message.lower()
+
+        # Search collected articles when intent is retrieval
+        search_patterns = [
+            r"\b(based on|from|using|in)\b.*\b(collected|stored|my)\b.*\barticle",
+            r"\b(collected|stored|my)\b.*\barticles?\b",
+            r"\bfind\b.*\barticles?\b",
+            r"\barticles?\b.*\b(about|on|related to|concerning|regarding)\b",
+            r"\bsearch\b.*\barticles?\b",
+            r"\buse cases?\b.*\barticles?\b",
+            r"\barticles?\b.*\b(links?|url)\b",
+            r"\bexample.*from.*article",
+        ]
+        is_search = any(re.search(p, lower) for p in search_patterns)
+
+        if is_search:
+            query = re.sub(
+                r"\b(find|search|show|get|retrieve|list|give me|provide|based on|from|using|in|my|collected|stored|articles?|links?|urls?)\b",
+                " ", lower
+            ).strip()
+            query = re.sub(r"\s+", " ", query).strip()
+            if query and len(query) > 3:
+                return await search_collected_articles_text(query, limit=10)
+
+        # Curate fresh articles, optionally for a specific topic
         topics = None
         raw_topic = await llm_generate(
             prompt=f"Extract the topic the user wants articles about. Return ONLY the topic phrase. If no specific topic, return 'general'.\n\nUser message: {message}",
@@ -515,8 +573,16 @@ def register_all_skills():
     register_skill(Skill(
         id="article_curation",
         name="Article Curation",
-        description="Curate top articles from the web, score them for relevance, and suggest LinkedIn thought leadership angles; supports custom topics",
-        examples=["curate articles", "find articles about AI governance", "what are the top articles this week", "curate content for LinkedIn"],
+        description="Search collected articles by topic or keyword; curate fresh top articles from the web; score for relevance and suggest LinkedIn thought leadership angles",
+        examples=[
+            "find articles about AI governance",
+            "articles about NIST framework with links",
+            "articles related to AI framework use cases",
+            "curate articles",
+            "what are the top articles this week",
+            "curate content for LinkedIn",
+            "use cases based on collected articles",
+        ],
         read_handler=_article_curation_read,
         write_handler=_article_curation_write,
         category="professional",
@@ -770,11 +836,72 @@ def register_all_skills():
         category="personal",
     ))
 
+    # ── Exercise PRs ──
+    async def _exercise_prs_read(message, http_client=None):
+        from app.services.fitness.tonal_sync import get_all_prs, get_recent_prs
+        lower = message.lower()
+
+        # Recent PRs
+        if "recent" in lower or "new" in lower or "latest" in lower or "this week" in lower:
+            days = 7
+            if "month" in lower or "30" in lower:
+                days = 30
+            prs = await get_recent_prs(days=days)
+            if not prs:
+                return f"No new PRs in the last {days} days. Keep pushing."
+            lines = [f"**Recent PRs (last {days} days):**\n"]
+            for p in prs:
+                name = p["movement_name"] or p["movement_id"][:8]
+                prev = f" (prev: {p['previous_value']:.1f})" if p.get("previous_value") else ""
+                lines.append(f"  🏆 **{name}** — {p['value']:.1f} lbs 1RM{prev}")
+            return "\n".join(lines)
+
+        # Search for specific exercise
+        import re
+        search_terms = re.sub(r'\b(pr|prs|personal record|best|max|what|my|is|for|the|show|exercise)\b', '', lower).strip()
+        if search_terms and len(search_terms) > 2:
+            all_prs = await get_all_prs()
+            matches = [p for p in all_prs if search_terms in (p.get("movement_name") or "").lower()]
+            if matches:
+                lines = [f"**PRs matching '{search_terms}':**\n"]
+                for p in matches:
+                    prev = f" (prev: {p['previous_value']:.1f})" if p.get("previous_value") else ""
+                    lines.append(f"  🏆 **{p['movement_name']}** — {p['value']:.1f} lbs 1RM{prev} ({p['achieved_at'].strftime('%Y-%m-%d')})")
+                return "\n".join(lines)
+
+        # Default: top PRs
+        all_prs = await get_all_prs()
+        if not all_prs:
+            return "No PRs tracked yet. Complete a Tonal workout to start tracking."
+        lines = [f"**Top Personal Records** ({len(all_prs)} exercises tracked):\n"]
+        for p in all_prs[:15]:
+            name = p["movement_name"] or p["movement_id"][:8]
+            prev = f" ↑ from {p['previous_value']:.1f}" if p.get("previous_value") else ""
+            lines.append(f"  🏆 **{name}** — {p['value']:.1f} lbs{prev} ({p['achieved_at'].strftime('%Y-%m-%d')})")
+        if len(all_prs) > 15:
+            lines.append(f"\n  ...and {len(all_prs) - 15} more. Ask about a specific exercise.")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="exercise_prs",
+        name="Exercise PRs",
+        description="View personal records (PRs) from Tonal — best estimated 1RM for each exercise, recent PRs, search by exercise name",
+        examples=[
+            "show my PRs", "personal records", "what are my PRs",
+            "recent PRs", "new PRs this week",
+            "PR for deadlift", "best squat", "bench press PR",
+            "top lifts", "strongest exercises",
+        ],
+        read_handler=_exercise_prs_read,
+        write_handler=None,
+        category="personal",
+    ))
+
     # ── Villain Challenge skills ──
 
     async def _villain_status_read(message, http_client=None):
         from app.services.villain_challenge.hero_engine import get_hero_profile
-        from app.services.villain_challenge.villain_engine import get_active_challenge
+        from app.services.villain_challenge.villain_engine import get_active_challenge, get_paused_challenge
         from app.services.villain_challenge.battle_system import calculate_daily_battle_probability
         from app.services.villain_challenge.narrative import format_hero_status
 
@@ -783,7 +910,14 @@ def register_all_skills():
         battle_status = None
         if challenge:
             battle_status = await calculate_daily_battle_probability(challenge, hero_data)
-        return await format_hero_status(hero_data, challenge, battle_status)
+            return await format_hero_status(hero_data, challenge, battle_status)
+
+        paused = await get_paused_challenge()
+        if paused:
+            status = await format_hero_status(hero_data, None, None)
+            return status + f"\n\n⏸ **Challenge paused** — vs. {paused['villain_name']}. Say 'resume challenge' to continue."
+
+        return await format_hero_status(hero_data, None, None)
 
     async def _villain_checkin_write(message, http_client=None):
         from app.services.villain_challenge.xp_engine import award_xp
@@ -797,6 +931,69 @@ def register_all_skills():
         import re
 
         msg = message.lower()
+
+        # Handle pause/resume commands
+        if re.search(r'\b(pause|vacation|hold|freeze)\b', msg):
+            from app.services.villain_challenge.villain_engine import (
+                pause_challenge, get_paused_challenge, schedule_pause, get_scheduled_pauses,
+            )
+            from dateutil import parser as date_parser
+            from datetime import date as dt_date
+
+            # Check for date range: "pause from June 15 to June 22" or "pause June 15 - 22"
+            date_range = re.search(
+                r'(?:from|starting|begin)\s+(.+?)\s+(?:to|through|until|thru|-)\s+(.+?)(?:\s*$|\s+for|\s+because)',
+                msg
+            ) or re.search(
+                r'(\w+\s+\d{1,2})\s*(?:to|-|through|thru)\s*(\w+\s+\d{1,2})',
+                msg
+            )
+
+            if date_range:
+                try:
+                    start = date_parser.parse(date_range.group(1), fuzzy=True).date()
+                    end = date_parser.parse(date_range.group(2), fuzzy=True).date()
+                    if start < dt_date.today():
+                        start = dt_date.today()
+                    if end <= start:
+                        return "End date must be after start date."
+                    reason_match = re.search(r'(?:for|because|reason:?)\s+(.+)', msg)
+                    reason = reason_match.group(1).strip() if reason_match else "vacation"
+                    result = await schedule_pause(start, end, reason)
+                    days = (end - start).days
+                    if start == dt_date.today():
+                        # Also pause immediately
+                        await pause_challenge()
+                        return (f"⏸ **Challenge paused now** through **{end.strftime('%b %d')}** ({days} days).\n"
+                                f"Auto-resumes on {end.strftime('%b %d')}. Reason: {reason}")
+                    return (f"📅 **Pause scheduled:** {start.strftime('%b %d')} → {end.strftime('%b %d')} ({days} days)\n"
+                            f"Challenge will auto-pause and auto-resume. Reason: {reason}")
+                except (ValueError, TypeError):
+                    pass  # Fall through to immediate pause
+
+            # Immediate pause (no dates)
+            paused = await get_paused_challenge()
+            if paused:
+                scheduled = await get_scheduled_pauses()
+                if scheduled:
+                    sched_info = ", ".join(f"{s['pause_start']} to {s['pause_end']}" for s in scheduled)
+                    return f"Challenge is already paused (vs. **{paused['villain_name']}**).\nScheduled pauses: {sched_info}\nSay 'resume challenge' when you're back."
+                return f"Challenge is already paused (vs. **{paused['villain_name']}**). Say 'resume challenge' when you're back."
+            result = await pause_challenge()
+            if result:
+                return f"⏸ **Challenge paused.** Your battle against **{result['villain_name']}** is on hold.\nNo objectives will be tracked and no new villains assigned until you resume.\nSay 'resume challenge' when you're back."
+            return "No active challenge to pause."
+
+        if re.search(r'\b(resume|unpause|back|restart)\b.*\b(challenge|battle|villain|fight)\b', msg) or \
+           re.search(r'\b(challenge|battle|villain|fight)\b.*\b(resume|unpause|back|restart)\b', msg):
+            from app.services.villain_challenge.villain_engine import resume_challenge, get_paused_challenge
+            paused = await get_paused_challenge()
+            if not paused:
+                return "No paused challenge to resume. You're good to go."
+            result = await resume_challenge()
+            if result:
+                return f"▶ **Challenge resumed!** Your battle against **{result['villain_name']}** is back on.\nObjectives are being tracked again. Let's go."
+            return "Failed to resume challenge."
 
         # Parse weight (e.g. "weight 183", "183 lbs", "weigh 183.5")
         weight = None
@@ -927,6 +1124,8 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             "completed mobility work", "nutrition 80",
             "I did mobility and met 70% nutrition",
             "log weight 200 lbs", "check in mobility done",
+            "pause challenge", "pause villain", "going on vacation",
+            "resume challenge", "resume battle",
         ],
         read_handler=_villain_status_read,
         write_handler=_villain_checkin_write,
@@ -986,6 +1185,441 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
         ],
         read_handler=_villain_history_read,
         write_handler=None,
+        category="personal",
+    ))
+
+    # ── Idea Factory ──
+    async def _idea_factory_read(message, http_client=None):
+        from app.services.idea_factory_service import list_ideas, get_idea
+        import re
+        id_match = re.search(r'\bidea\s+(\d+)\b', message.lower())
+        if id_match:
+            idea = await get_idea(int(id_match.group(1)))
+            if idea:
+                lines = [
+                    f"**#{idea['id']}: {idea['title']}** ({idea['stage']})",
+                    f"_{idea['description']}_" if idea['description'] else "",
+                    f"Tags: {', '.join(idea['tags'])}" if idea['tags'] else "",
+                    f"Created: {idea['created_at'].strftime('%Y-%m-%d')}",
+                ]
+                if idea.get('challenge_output'):
+                    lines.append(f"\n**Last Challenge:**\n{idea['challenge_output']}")
+                return "\n".join(l for l in lines if l)
+            return "Idea not found."
+        ideas = await list_ideas()
+        if not ideas:
+            return "No ideas captured yet. Drop one with 'idea: your concept here'."
+        lines = ["**Idea Factory** — Active Ideas:\n"]
+        for i in ideas:
+            age = (i['updated_at'] - i['created_at']).days
+            lines.append(f"  #{i['id']} [{i['stage']}] {i['title']} ({age}d old)")
+        return "\n".join(lines)
+
+    async def _idea_factory_write(message, http_client=None):
+        import re
+        from app.services.idea_factory_service import (
+            parse_idea_command, capture_idea, challenge_idea,
+            list_ideas, advance_idea, kill_idea, generate_retrospective,
+        )
+        cmd = parse_idea_command(message)
+        action = cmd["action"]
+        if action == "capture":
+            text = cmd["text"]
+            parts = re.split(r'[.\n]', text, maxsplit=1)
+            title = parts[0].strip()
+            desc = parts[1].strip() if len(parts) > 1 else ""
+            idea = await capture_idea(title, desc)
+            return f"💡 Captured: **#{idea['id']} — {idea['title']}** (stage: spark)\nChallenge it with 'challenge: {title}'"
+        elif action == "challenge":
+            result = await challenge_idea(cmd["text"])
+            return f"**Challenge Results:**\n\n{result}"
+        elif action == "list":
+            ideas = await list_ideas()
+            if not ideas:
+                return "No active ideas. Capture one with 'idea: your concept here'."
+            lines = ["**Idea Pipeline:**\n"]
+            for i in ideas:
+                lines.append(f"  #{i['id']} [{i['stage']}] {i['title']}")
+            return "\n".join(lines)
+        elif action == "advance":
+            idea = await advance_idea(cmd["id"], cmd["stage"])
+            if idea:
+                return f"✅ **#{idea['id']} — {idea['title']}** moved to **{idea['stage']}**"
+            return "Failed to advance — check the idea ID and stage name."
+        elif action == "kill":
+            idea = await kill_idea(cmd["id"])
+            if idea:
+                return f"💀 **#{idea['id']} — {idea['title']}** killed."
+            return "Idea not found."
+        elif action == "retrospective":
+            retro = await generate_retrospective()
+            return f"**Idea Retrospective:**\n\n{retro}"
+        return "Didn't understand that idea command. Try: 'idea: <concept>', 'challenge: <idea>', 'list ideas', 'advance idea 3 to exploring', 'kill idea 3'"
+
+    register_skill(Skill(
+        id="idea_factory",
+        name="Idea Factory",
+        description="Capture, challenge, evolve, and review product/project ideas — brainstorm, stress-test concepts, track idea pipeline",
+        examples=[
+            "idea: fitness app for couples",
+            "new idea: automated meal prep scheduling",
+            "challenge: what if I built a SaaS for personal trainers",
+            "list my ideas", "show ideas",
+            "advance idea 2 to validating",
+            "kill idea 5",
+            "idea retrospective",
+        ],
+        read_handler=_idea_factory_read,
+        write_handler=_idea_factory_write,
+        category="personal",
+    ))
+
+    # ── Receipts / Tax Tracking ──
+    async def _receipts_read(message, http_client=None):
+        from app.services.receipt_service import get_receipts, get_tax_summary
+        import re
+        lower = message.lower()
+        if "summary" in lower or "total" in lower or "how much" in lower:
+            year_match = re.search(r'20\d{2}', message)
+            year = int(year_match.group()) if year_match else None
+            summary = await get_tax_summary(year)
+            if not summary["total_receipts"]:
+                return f"No receipts for {summary['tax_year']}. Upload some via the UI or the /skills/receipts/upload endpoint."
+            lines = [f"**Tax Receipt Summary — {summary['tax_year']}**\n"]
+            lines.append(f"Total: **${summary['grand_total']:,.2f}** across {summary['total_receipts']} receipts\n")
+            for cat in summary["by_category"]:
+                name = cat["category"].replace("_", " ").title()
+                lines.append(f"  {name}: ${float(cat['total'] or 0):,.2f} ({cat['count']} receipts)")
+            return "\n".join(lines)
+        category = None
+        for cat in ["business_expense", "office_supplies", "software", "travel",
+                    "meals", "professional_development", "equipment", "home_office",
+                    "medical", "charitable", "vehicle", "insurance", "utilities"]:
+            if cat.replace("_", " ") in lower or cat in lower:
+                category = cat if cat != "software" else "software_subscriptions"
+                if cat == "meals":
+                    category = "meals_entertainment"
+                break
+        year_match = re.search(r'20\d{2}', message)
+        year = int(year_match.group()) if year_match else None
+        vendor = None
+        vendor_match = re.search(r'(?:from|at|for)\s+([A-Z][\w\s]+)', message)
+        if vendor_match:
+            vendor = vendor_match.group(1).strip()
+        receipts = await get_receipts(tax_year=year, category=category, vendor=vendor)
+        if not receipts:
+            filters = []
+            if year:
+                filters.append(str(year))
+            if category:
+                filters.append(category)
+            if vendor:
+                filters.append(vendor)
+            return f"No receipts found{' for ' + ', '.join(filters) if filters else ''}."
+        lines = [f"**Receipts** ({len(receipts)} found):\n"]
+        total = 0
+        for r in receipts[:20]:
+            amt = f"${r['amount']:,.2f}" if r.get("amount") else "?"
+            dt = r["receipt_date"].strftime("%m/%d") if r.get("receipt_date") else "?"
+            cat = r["category"].replace("_", " ").title() if r.get("category") else ""
+            lines.append(f"  #{r['id']} {dt} — **{r['vendor'] or 'Unknown'}** — {amt} [{cat}]")
+            total += float(r["amount"] or 0)
+        if len(receipts) > 20:
+            lines.append(f"  ...and {len(receipts) - 20} more")
+        lines.append(f"\n  **Total: ${total:,.2f}**")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="receipts",
+        name="Receipts & Tax Tracking",
+        description="Query uploaded receipts for tax purposes — view by year, category, vendor; get tax summaries and totals",
+        examples=[
+            "show my receipts", "receipts for 2026",
+            "tax summary", "how much did I spend this year",
+            "business expenses", "software subscriptions receipts",
+            "receipts from Amazon", "travel expenses 2026",
+        ],
+        read_handler=_receipts_read,
+        write_handler=None,
+        category="personal",
+    ))
+
+    # -- Planner (Panda-style) --
+    async def _planner_read(message, http_client=None):
+        from app.services.planner_service import (
+            get_current_plan,
+            get_weekly_review,
+            get_monthly_review,
+            suggest_daily_priorities,
+            get_daily_priorities,
+            parse_planner_command,
+        )
+        from datetime import timedelta
+
+        cmd = parse_planner_command(message)
+        action = cmd.get("action")
+
+        if action == "weekly_review":
+            review = await get_weekly_review()
+            lines = [
+                f"**Weekly Review** ({review['week_start']} to {review['week_end']})",
+                f"Weekly goals: {review['weekly_done']}/{review['weekly_total']} complete",
+                f"Daily priorities: {review['priorities_done']}/{review['priorities_total']} complete",
+            ]
+            if review.get("avg_sleep") is not None:
+                lines.append(f"Avg sleep performance: {review['avg_sleep']:.1f}%")
+            if review.get("avg_recovery") is not None:
+                lines.append(f"Avg recovery score: {review['avg_recovery']:.1f}%")
+
+            if review["weekly_goals"]:
+                lines.append("\nGoals:")
+                for g in review["weekly_goals"]:
+                    mark = "[x]" if g["completed"] else "[ ]"
+                    lines.append(f"  {mark} W{g['slot']}: {g['title']}")
+            return "\n".join(lines)
+
+        if action == "monthly_review":
+            review = await get_monthly_review()
+            lines = [
+                f"**Monthly Review** ({review['month_start']} to {review['month_end']})",
+                f"Monthly goals: {review['monthly_done']}/{review['monthly_total']} complete",
+                f"Weekly goals completed this month: {review['weekly_done']}/{review['weekly_total']}",
+            ]
+            if review["monthly_goals"]:
+                lines.append("\nGoals:")
+                for g in review["monthly_goals"]:
+                    mark = "[x]" if g["completed"] else "[ ]"
+                    lines.append(f"  {mark} M{g['slot']}: {g['title']}")
+            return "\n".join(lines)
+
+        if action == "recommend_priorities":
+            recs = await suggest_daily_priorities(limit=3)
+            lines = [
+                "**Recommended Daily Priorities**",
+                f"Open goals: weekly {recs['weekly_open']}, monthly {recs['monthly_open']}",
+            ]
+            for i, r in enumerate(recs["recommendations"], 1):
+                lines.append(f"  {i}. {r['text']}")
+                lines.append(f"     Why: {r['rationale']}")
+            return "\n".join(lines)
+
+        if action == "show_day_goals":
+            from datetime import date
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            goals = await get_daily_priorities(target)
+            heading = "Tomorrow's Goals" if cmd.get("day") == "tomorrow" else "Today's Goals"
+            if not goals:
+                if cmd.get("day") == "tomorrow":
+                    return "No goals saved for tomorrow yet. Add them with: planner goals for tomorrow: goal 1, goal 2, goal 3"
+                recs = await suggest_daily_priorities(limit=3)
+                lines = [f"**{heading}:**"]
+                for i, r in enumerate(recs["recommendations"], 1):
+                    lines.append(f"{i}. **{r['text']}**")
+                return "\n".join(lines)
+            lines = [f"**{heading} in Planner:**"]
+            for g in goals:
+                mark = "✅" if g.get("completed") else "❌"
+                lines.append(f"{g['slot']}. {g['title']} {mark}")
+            return "\n".join(lines)
+
+        plan = await get_current_plan()
+        lines = [
+            "**Planner Dashboard**",
+            f"Month: {plan['month_start']}",
+            f"Week:  {plan['week_start']} to {plan['week_end']}",
+            f"Today: {plan['today']}",
+            "",
+            "**Monthly Goals**",
+        ]
+        if plan["monthly"]:
+            for g in plan["monthly"]:
+                mark = "[x]" if g["completed"] else "[ ]"
+                lines.append(f"  {mark} M{g['slot']}: {g['title']}")
+        else:
+            lines.append("  No monthly goals yet. Add one with: monthly goal: <text>")
+
+        lines.append("\n**Weekly Goals**")
+        if plan["weekly"]:
+            for g in plan["weekly"]:
+                mark = "[x]" if g["completed"] else "[ ]"
+                lines.append(f"  {mark} W{g['slot']}: {g['title']}")
+        else:
+            lines.append("  No weekly goals yet. Add one with: weekly goal: <text>")
+
+        lines.append("\n**Top 3 Today**")
+        if plan["daily"]:
+            for d in plan["daily"]:
+                mark = "[x]" if d["completed"] else "[ ]"
+                lines.append(f"  {mark} P{d['slot']}: {d['title']}")
+        else:
+            lines.append("  No daily priorities yet. Add one with: today priority: <text>")
+
+        recs = await suggest_daily_priorities(limit=3)
+        lines.append("\n**Suggested Priorities**")
+        for i, r in enumerate(recs["recommendations"], 1):
+            lines.append(f"  {i}. {r['text']}")
+
+        lines.append("\nCommands: monthly goal, weekly goal, today priority, planner goals for tomorrow: a, b, c, show tomorrow's goals, recommend priorities, complete priority 1, done <title>, weekly review, monthly review")
+        return "\n".join(lines)
+
+    async def _planner_write(message, http_client=None):
+        from app.services.planner_service import (
+            parse_planner_command,
+            parse_goal_items,
+            set_monthly_goal,
+            set_weekly_goal,
+            set_weekly_goals_batch,
+            set_daily_priority,
+            set_daily_priority_for_date,
+            replace_daily_priorities_for_date,
+            complete_daily_priority,
+            complete_weekly_goal,
+            complete_monthly_goal,
+            complete_item_by_text,
+            suggest_daily_priorities,
+            get_current_plan,
+            get_weekly_review,
+            get_monthly_review,
+        )
+        from datetime import date, timedelta
+
+        cmd = parse_planner_command(message)
+        action = cmd.get("action")
+
+        if action == "set_monthly":
+            result = await set_monthly_goal(cmd["text"], slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            return f"Saved monthly goal M{result['slot']}: {result['title']}"
+
+        if action == "set_monthly_batch":
+            lines = []
+            for item in cmd.get("items", []):
+                result = await set_monthly_goal(item)
+                if result.get("error"):
+                    lines.append(f"  ⚠ {result['error']}: {item}")
+                else:
+                    lines.append(f"  M{result['slot']}: {result['title']}")
+            return "Saved monthly goals:\n" + "\n".join(lines) if lines else "No monthly goals saved."
+
+        if action == "set_weekly":
+            result = await set_weekly_goal(cmd["text"], slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            return f"Saved weekly goal W{result['slot']}: {result['title']}"
+
+        if action == "set_weekly_batch":
+            result = await set_weekly_goals_batch(cmd["items"])
+            saved = result.get("saved", [])
+            skipped = result.get("skipped", [])
+            lines = [f"Saved {len(saved)} weekly goals:"]
+            for g in saved:
+                lines.append(f"  W{g['slot']}: {g['title']}")
+            if skipped:
+                lines.append(f"Could not save (slots full): {', '.join(skipped)}")
+            return "\n".join(lines)
+
+        if action == "set_daily":
+            result = await set_daily_priority(cmd["text"], slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            return f"Saved daily priority P{result['slot']}: {result['title']}"
+
+        if action == "set_daily_for_day":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            result = await set_daily_priority_for_date(cmd["text"], for_date=target, slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            return f"Saved {day_label} priority P{result['slot']}: {result['title']}"
+
+        if action == "set_daily_batch":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            items = parse_goal_items(cmd.get("text", ""))
+            if not items:
+                return "I didn't find any goals in that message. Try: planner goals for tomorrow: goal 1, goal 2, goal 3"
+            result = await replace_daily_priorities_for_date(items, for_date=target)
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            lines = [f"Saved {result['saved']} goals for {day_label}."]
+            for item in result.get("items", []):
+                lines.append(f"  P{item['slot']}: {item['title']}")
+            if result.get("truncated"):
+                lines.append(f"Note: kept top 3 only ({result['truncated']} extra omitted).")
+            return "\n".join(lines)
+
+        if action == "complete_daily":
+            ok = await complete_daily_priority(cmd["slot"])
+            if not ok:
+                return f"Could not complete priority {cmd['slot']}. Add it first with: today priority {cmd['slot']}: <text>"
+            return f"Marked daily priority P{cmd['slot']} complete."
+
+        if action == "complete_weekly":
+            ok = await complete_weekly_goal(cmd["slot"])
+            if not ok:
+                return f"Could not complete weekly goal {cmd['slot']}. Add it first with: weekly goal {cmd['slot']}: <text>"
+            return f"Marked weekly goal W{cmd['slot']} complete."
+
+        if action == "complete_monthly":
+            ok = await complete_monthly_goal(cmd["slot"])
+            if not ok:
+                return f"Could not complete monthly goal {cmd['slot']}. Add it first with: monthly goal {cmd['slot']}: <text>"
+            return f"Marked monthly goal M{cmd['slot']} complete."
+
+        if action == "complete_by_text":
+            result = await complete_item_by_text(cmd.get("text", ""))
+            if not result.get("matched"):
+                return "I couldn't match that to today's planner items. Try 'show planner' to see exact names, or use a slot number."
+            if result.get("already_completed"):
+                return (
+                    f"Already complete: {result['kind']} {result['slot']} — {result['title']}"
+                )
+            prefix = {"daily": "P", "weekly": "W", "monthly": "M"}.get(result["kind"], "")
+            return f"Marked complete: {prefix}{result['slot']} — {result['title']}"
+
+        if action == "weekly_review":
+            review = await get_weekly_review()
+            return (
+                f"Weekly review: goals {review['weekly_done']}/{review['weekly_total']}, "
+                f"priorities {review['priorities_done']}/{review['priorities_total']}."
+            )
+
+        if action == "monthly_review":
+            review = await get_monthly_review()
+            return (
+                f"Monthly review: goals {review['monthly_done']}/{review['monthly_total']}, "
+                f"weekly goals complete {review['weekly_done']}/{review['weekly_total']}."
+            )
+
+        if action == "recommend_priorities":
+            recs = await suggest_daily_priorities(limit=3)
+            lines = ["Recommended priorities for today:"]
+            for i, r in enumerate(recs["recommendations"], 1):
+                lines.append(f"{i}. {r['text']} ({r['rationale']})")
+            return "\n".join(lines)
+
+        plan = await get_current_plan()
+        return (
+            f"Planner ready. Monthly goals: {len(plan['monthly'])}, "
+            f"weekly goals: {len(plan['weekly'])}, today priorities: {len(plan['daily'])}."
+        )
+
+    register_skill(Skill(
+        id="planner",
+        name="Planner",
+        description="Panda-style planning: set monthly goals, weekly goals, daily top 3 priorities, and run weekly/monthly reviews.",
+        examples=[
+            "monthly goal: launch receipts workflow",
+            "weekly goal: complete 4 training sessions",
+            "today priority: ship planner skill",
+            "complete priority 1",
+            "done ship planner mvp",
+            "recommend priorities",
+            "weekly review",
+            "monthly review",
+            "show planner",
+        ],
+        read_handler=_planner_read,
+        write_handler=_planner_write,
         category="personal",
     ))
 

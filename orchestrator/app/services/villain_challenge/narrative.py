@@ -248,6 +248,56 @@ Generate a dramatic tier unlock announcement (under 80 words).
     )
 
 
+async def generate_battle_recap(
+    last_battle: dict,
+    new_villain_name: str,
+    hero_data: dict,
+    tone: str = "shield_tactical",
+) -> str:
+    """Generate a narrative recap of the last battle result, transitioning into the new week's villain."""
+    t = _get_tone(tone)
+    villain = last_battle.get("villain_name", "Unknown")
+    outcome = last_battle.get("outcome", "Unknown")
+    score = last_battle.get("battle_score", 0)
+    hero_hci = last_battle.get("hero_hci", 0)
+    is_victory = "victory" in outcome.lower() or "domination" in outcome.lower()
+    hero_tier = hero_data.get("tier", "Street Level") if hero_data else "Street Level"
+    archetype = hero_data.get("archetype", "Recruit") if hero_data else "Recruit"
+
+    prompt = f"""You are {t['name']}, delivering a weekly battle recap that bridges last week's result into a new threat.
+
+LAST WEEK'S BATTLE:
+- Villain Faced: {villain}
+- Outcome: {outcome}
+- Battle Score: {score:.1f}
+- Hero HCI at Resolution: {hero_hci:.1f}
+- Result: {"VICTORY" if is_victory else "DEFEAT"}
+
+THIS WEEK'S THREAT:
+- New Villain: {new_villain_name}
+
+HERO STATUS:
+- Tier: {hero_tier}
+- Archetype: {archetype}
+
+Generate a narrative recap (150-200 words) that:
+- Opens with a dramatic summary of last week's battle against {villain}
+- If victory: celebrate the win, note the hero's growing power
+- If defeat: acknowledge the setback, frame it as fuel for the next fight
+- Transition dramatically into the arrival of {new_villain_name} as the new week's threat
+- Build anticipation and tension for the coming battle
+- Match {t['name']}'s voice and style
+- Use Marvel X-Men universe language
+- Do NOT use hashtags or emoji
+- Do NOT list objectives (those come separately)"""
+
+    return await generate(
+        prompt=prompt,
+        system_prompt=f"You are {t['name']}. Bridge past battles into future threats with gravitas.",
+        model=None,
+    )
+
+
 async def format_hero_status(hero_data: dict, challenge: dict | None, battle_status: dict | None) -> str:
     """Format a quick hero status summary (non-LLM, deterministic)."""
     lines = []

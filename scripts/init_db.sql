@@ -737,3 +737,92 @@ CREATE TABLE IF NOT EXISTS daily_checkins (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_daily_checkins_date ON daily_checkins (checkin_date DESC);
+
+-- ════════════════════════════════════════════════════════════════
+-- Idea Factory
+-- ════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ideas (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    stage VARCHAR(50) NOT NULL DEFAULT 'spark',  -- spark, exploring, validating, building, shipped, killed
+    tags TEXT[] DEFAULT '{}',
+    challenge_output TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ideas_stage ON ideas (stage);
+CREATE INDEX IF NOT EXISTS idx_ideas_created ON ideas (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS idea_interactions (
+    id SERIAL PRIMARY KEY,
+    idea_id INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    interaction_type VARCHAR(50) NOT NULL,  -- capture, challenge, note, spark, digest, advance, kill
+    content TEXT DEFAULT '',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_idea_interactions_idea ON idea_interactions (idea_id);
+CREATE INDEX IF NOT EXISTS idx_idea_interactions_type ON idea_interactions (interaction_type);
+
+-- ════════════════════════════════════════════════════════════════
+-- Exercise Personal Records (PRs)
+-- ════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS exercise_prs (
+    id SERIAL PRIMARY KEY,
+    movement_id VARCHAR(255) NOT NULL,
+    movement_name VARCHAR(500) DEFAULT '',
+    platform VARCHAR(50) NOT NULL DEFAULT 'tonal',
+    pr_type VARCHAR(50) NOT NULL DEFAULT 'one_rep_max',
+    value REAL NOT NULL,
+    previous_value REAL,
+    reps INTEGER DEFAULT 1,
+    workout_id VARCHAR(255) DEFAULT '',
+    achieved_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(movement_id, platform, pr_type)
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_prs_movement ON exercise_prs (movement_id);
+CREATE INDEX IF NOT EXISTS idx_exercise_prs_achieved ON exercise_prs (achieved_at DESC);
+
+-- =================================================================
+-- Planner (Panda-style)
+-- =================================================================
+CREATE TABLE IF NOT EXISTS planner_monthly_goals (
+    id SERIAL PRIMARY KEY,
+    month_start DATE NOT NULL,
+    slot INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT DEFAULT '',
+    completed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(month_start, slot)
+);
+CREATE INDEX IF NOT EXISTS idx_planner_monthly_month_start ON planner_monthly_goals (month_start DESC);
+
+CREATE TABLE IF NOT EXISTS planner_weekly_goals (
+    id SERIAL PRIMARY KEY,
+    week_start DATE NOT NULL,
+    week_end DATE NOT NULL,
+    slot INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT DEFAULT '',
+    completed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(week_start, slot)
+);
+CREATE INDEX IF NOT EXISTS idx_planner_weekly_week_start ON planner_weekly_goals (week_start DESC);
+
+CREATE TABLE IF NOT EXISTS planner_daily_priorities (
+    id SERIAL PRIMARY KEY,
+    plan_date DATE NOT NULL,
+    slot INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT DEFAULT '',
+    completed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(plan_date, slot)
+);
+CREATE INDEX IF NOT EXISTS idx_planner_daily_plan_date ON planner_daily_priorities (plan_date DESC);

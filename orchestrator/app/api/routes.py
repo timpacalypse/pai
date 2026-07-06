@@ -917,6 +917,45 @@ async def ingest_file(request: Request):
     return result
 
 
+@router.post("/skills/receipts/upload")
+async def upload_receipt(request: Request):
+    """Upload a receipt (image or PDF) for tax tracking."""
+    from app.services.receipt_service import ingest_receipt
+
+    form = await request.form()
+    file = form.get("file")
+    if not file or not hasattr(file, "read"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="No file uploaded. Use multipart form with field 'file'.")
+
+    file_bytes = await file.read()
+    filename = getattr(file, "filename", "receipt.jpg")
+
+    result = await ingest_receipt(file_bytes, filename)
+    return result
+
+
+@router.get("/skills/receipts")
+async def list_receipts(request: Request):
+    """Query receipts with optional filters."""
+    from app.services.receipt_service import get_receipts
+    params = request.query_params
+    year = int(params["year"]) if "year" in params else None
+    category = params.get("category")
+    vendor = params.get("vendor")
+    limit = int(params.get("limit", 50))
+    return await get_receipts(tax_year=year, category=category, vendor=vendor, limit=limit)
+
+
+@router.get("/skills/receipts/summary")
+async def receipt_summary(request: Request):
+    """Get tax receipt summary by category."""
+    from app.services.receipt_service import get_tax_summary
+    params = request.query_params
+    year = int(params["year"]) if "year" in params else None
+    return await get_tax_summary(tax_year=year)
+
+
 # ── Medical History ─────────────────────────────────────────────
 
 

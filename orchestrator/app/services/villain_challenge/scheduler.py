@@ -36,6 +36,14 @@ async def run_villain_cycle():
     from app.services.villain_challenge.xp_engine import (
         expire_surges, check_and_activate_surges,
     )
+    from app.services.villain_challenge.villain_engine import check_scheduled_pauses
+
+    # Always: check scheduled pauses (vacation mode)
+    pause_action = await check_scheduled_pauses()
+    if pause_action == "paused":
+        logger.info("scheduled_pause_activated")
+    elif pause_action == "resumed":
+        logger.info("scheduled_pause_ended")
 
     # Always: expire old surges
     await expire_surges()
@@ -45,6 +53,9 @@ async def run_villain_cycle():
     if surges:
         logger.info("surges_activated", extra={"count": len(surges)})
 
+    # Resolve any overdue challenge (missed Sunday resolution window)
+    await _resolve_overdue_challenge()
+
     # Monday: Create new weekly challenge if needed
     if weekday == 0:
         await _maybe_create_weekly_challenge()
@@ -53,6 +64,10 @@ async def run_villain_cycle():
     elif weekday == 6 and 18 <= hour <= 22:
         await _maybe_resolve_weekly_battle()
 
+    # Any day: if no active challenge exists, create one
+    elif weekday != 6:
+        await _maybe_create_weekly_challenge()
+
     # Daily: update objective progress from fitness data
     await _sync_objective_progress()
 
@@ -60,7 +75,7 @@ async def run_villain_cycle():
 async def _maybe_create_weekly_challenge():
     """Create a new weekly challenge if one doesn't exist for this week."""
     from app.services.villain_challenge.villain_engine import (
-        get_active_challenge, select_weekly_villain,
+        get_active_challenge, get_paused_challenge, select_weekly_villain,
         generate_weekly_objectives, create_weekly_challenge,
     )
     from app.services.villain_challenge.hero_engine import get_hero_profile
@@ -68,6 +83,10 @@ async def _maybe_create_weekly_challenge():
     existing = await get_active_challenge()
     if existing:
         return  # Already have a challenge this week
+
+    paused = await get_paused_challenge()
+    if paused:
+        return  # Challenge is paused (vacation, etc.) — don't create a new one
 
     hero_data = await get_hero_profile()
     villain_selection = await select_weekly_villain(hero_data)
@@ -77,6 +96,42 @@ async def _maybe_create_weekly_challenge():
     logger.info("weekly_challenge_created", extra={
         "villain": villain_selection["villain_name"],
         "objectives": len(objectives),
+    })
+
+
+async def _resolve_overdue_challenge():
+    """Resolve any active challenge whose week_end has passed (missed Sunday window)."""
+    from app.services.villain_challenge.villain_engine import get_active_challenge
+    from app.services.villain_challenge.hero_engine import get_hero_profile
+    from app.services.villain_challenge.battle_system import resolve_weekly_battle
+    from app.services.villain_challenge.xp_engine import award_battle_xp
+
+    challenge = await get_active_challenge()
+    if not challenge or challenge.get("status") != "active":
+        return
+
+    week_end = challenge.get("week_end")
+    if isinstance(week_end, str):
+        week_end = date.fromisoformat(week_end)
+
+    today = date.today()
+    if today <= week_end:
+        return  # Challenge is still in progress
+
+    logger.warning("resolving_overdue_challenge", extra={
+        "challenge_id": challenge["id"],
+        "week_end": str(week_end),
+        "days_overdue": (today - week_end).days,
+    })
+
+    hero_data = await get_hero_profile()
+    outcome = await resolve_weekly_battle(challenge, hero_data)
+    xp_result = await award_battle_xp(outcome, challenge_id=challenge.get("id"))
+
+    logger.info("overdue_challenge_resolved", extra={
+        "villain": outcome.get("villain_name"),
+        "outcome": outcome.get("name"),
+        "xp": xp_result.get("awarded"),
     })
 
 

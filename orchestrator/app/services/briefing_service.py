@@ -4,7 +4,7 @@ import imaplib
 import email
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 
 import httpx
@@ -28,6 +28,8 @@ async def build_daily_briefing(http_client: httpx.AsyncClient | None = None) -> 
     email_recs = await _get_email_recommendations(http_client)
     workout = await _get_todays_workout()
     villain = await _get_villain_challenge_status()
+    idea_spark = await _get_idea_spark()
+    planner = await _get_planner_snapshot()
 
     return {
         "weather": weather,
@@ -36,6 +38,8 @@ async def build_daily_briefing(http_client: httpx.AsyncClient | None = None) -> 
         "email_recommendations": email_recs,
         "workout": workout,
         "villain_challenge": villain,
+        "idea_spark": idea_spark,
+        "planner": planner,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -197,6 +201,67 @@ async def _get_todays_workout() -> dict:
         return {"day": "", "scheduled": [], "completed": []}
 
 
+async def _get_idea_spark() -> dict:
+    """Generate a daily creative spark for the idea factory."""
+    try:
+        from app.services.idea_factory_service import generate_daily_spark, generate_idea_digest
+        today = datetime.now(timezone.utc)
+        is_monday = today.weekday() == 0
+
+        spark = await generate_daily_spark()
+        digest = None
+        if is_monday:
+            digest_data = await generate_idea_digest()
+            if digest_data.get("has_ideas"):
+                digest = digest_data["digest"]
+
+        return {"spark": spark, "digest": digest, "is_monday": is_monday}
+    except Exception as e:
+        logger.warning("idea_spark_failed", extra={"error": str(e)})
+        return {"spark": None, "digest": None, "is_monday": False}
+
+
+async def _get_planner_snapshot() -> dict:
+    """Get planner context for daily email plus review snapshots."""
+    try:
+        from app.services.planner_service import (
+            get_current_plan,
+            get_weekly_review,
+            get_monthly_review,
+        )
+
+        today = datetime.now(timezone.utc).date()
+        is_monday = today.weekday() == 0
+        is_first_of_month = today.day == 1
+
+        current_plan = await get_current_plan(for_date=today)
+        weekly_review = None
+        monthly_review = None
+
+        if is_monday:
+            weekly_review = await get_weekly_review(for_date=today - timedelta(days=7))
+
+        if is_first_of_month:
+            monthly_review = await get_monthly_review(for_date=today - timedelta(days=1))
+
+        return {
+            "current_plan": current_plan,
+            "weekly_review": weekly_review,
+            "monthly_review": monthly_review,
+            "is_monday": is_monday,
+            "is_first_of_month": is_first_of_month,
+        }
+    except Exception as e:
+        logger.warning("planner_briefing_failed", extra={"error": str(e)})
+        return {
+            "current_plan": None,
+            "weekly_review": None,
+            "monthly_review": None,
+            "is_monday": False,
+            "is_first_of_month": False,
+        }
+
+
 async def _get_villain_challenge_status() -> dict:
     """Get current villain challenge status for the briefing."""
     today = datetime.now(timezone.utc)
@@ -209,6 +274,7 @@ async def _get_villain_challenge_status() -> dict:
         "challenge": None,
         "battle_status": None,
         "weekly_assignment": None,
+        "battle_recap_narrative": None,
     }
 
     try:
@@ -259,6 +325,9 @@ async def _get_villain_challenge_status() -> dict:
             # On Monday, flag this as the weekly assignment
             if is_monday:
                 from app.services.villain_challenge.models import get_villain
+                from app.services.villain_challenge.battle_system import get_battle_history
+                from app.services.villain_challenge.narrative import generate_battle_recap
+
                 villain = get_villain(challenge.get("villain_id", ""))
                 result["weekly_assignment"] = {
                     "villain_name": challenge.get("villain_name", ""),
@@ -268,6 +337,20 @@ async def _get_villain_challenge_status() -> dict:
                     "domain_focus": challenge.get("domain_focus", []),
                     "objectives": result["challenge"]["objectives"],
                 }
+
+                # Generate narrative bridging last battle to new assignment
+                history = await get_battle_history(limit=1)
+                if history:
+                    last_battle = history[0]
+                    try:
+                        recap = await generate_battle_recap(
+                            last_battle=last_battle,
+                            new_villain_name=challenge.get("villain_name", ""),
+                            hero_data=result["hero"],
+                        )
+                        result["battle_recap_narrative"] = recap
+                    except Exception as e:
+                        logger.warning("battle_recap_narrative_failed", extra={"error": str(e)})
 
         surges = await get_active_surges()
         result["active_surges"] = surges
@@ -336,6 +419,8 @@ def build_briefing_html(briefing: dict) -> str:
     email_recs = briefing.get("email_recommendations", {})
     workout = briefing.get("workout", {})
     villain = briefing.get("villain_challenge", {})
+    idea_spark = briefing.get("idea_spark", {})
+    planner = briefing.get("planner", {})
 
     # Weather section
     if weather.get("error"):
@@ -500,6 +585,104 @@ def build_briefing_html(briefing: dict) -> str:
     else:
         recs_html = f'<p style="color:#8b8fa8;">No actionable items found ({scanned} emails scanned).</p>'
 
+    # Idea Spark section
+    spark_html = ""
+    if idea_spark.get("spark"):
+        spark_text = idea_spark["spark"]
+        spark_html = (
+            f'<h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;'
+            f'border-bottom:1px solid #2a2d42;padding-bottom:8px;">'
+            f'💡 Daily Spark</h2>'
+            f'<div style="background:#1a2a2e;border:1px solid #2a5a5e;border-radius:8px;'
+            f'padding:14px;margin-bottom:12px;">'
+            f'<div style="color:#80cbc4;font-size:14px;line-height:1.5;">'
+            f'{spark_text}</div></div>'
+        )
+        if idea_spark.get("digest"):
+            digest_text = idea_spark["digest"].replace("\n", "<br>")
+            spark_html += (
+                f'<div style="background:#1a1a2e;border:1px solid #3a3a5e;border-radius:8px;'
+                f'padding:14px;margin-bottom:12px;">'
+                f'<div style="color:#bb86fc;font-size:12px;font-weight:700;'
+                f'text-transform:uppercase;margin-bottom:6px;">📋 Idea Digest</div>'
+                f'<div style="color:#d0d0e8;font-size:13px;line-height:1.5;">'
+                f'{digest_text}</div></div>'
+            )
+
+    # Planner section
+    planner_html = ""
+    current_plan = planner.get("current_plan") or {}
+    if current_plan:
+        monthly_items = current_plan.get("monthly", [])
+        weekly_items = current_plan.get("weekly", [])
+        daily_items = current_plan.get("daily", [])
+
+        def _planner_item_html(prefix: str, items: list[dict], empty_text: str) -> str:
+            if not items:
+                return f'<div style="color:#8b8fa8;font-size:13px;">{empty_text}</div>'
+            rows = []
+            for item in items:
+                mark = "✓" if item.get("completed") else "•"
+                color = "#4caf50" if item.get("completed") else "#e4e6f0"
+                rows.append(
+                    f'<div style="padding:3px 0;color:{color};font-size:13px;">'
+                    f'{mark} {prefix}{item["slot"]}: {item["title"]}</div>'
+                )
+            return "".join(rows)
+
+        weekly_review_html = ""
+        if planner.get("weekly_review"):
+            review = planner["weekly_review"]
+            weekly_review_html = (
+                f'<div style="background:#1a1d2e;border:1px solid #2a2d42;border-radius:8px;'
+                f'padding:12px;margin-bottom:12px;">'
+                f'<div style="color:#ffcc80;font-size:12px;font-weight:700;text-transform:uppercase;'
+                f'margin-bottom:6px;">Last Week Review</div>'
+                f'<div style="color:#e4e6f0;font-size:13px;line-height:1.5;">'
+                f'Goals complete: {review["weekly_done"]}/{review["weekly_total"]}<br>'
+                f'Daily priorities complete: {review["priorities_done"]}/{review["priorities_total"]}'
+                f'{"<br>Avg sleep: %.1f%%" % review["avg_sleep"] if review.get("avg_sleep") is not None else ""}'
+                f'{"<br>Avg recovery: %.1f%%" % review["avg_recovery"] if review.get("avg_recovery") is not None else ""}'
+                f'</div></div>'
+            )
+
+        monthly_review_html = ""
+        if planner.get("monthly_review"):
+            review = planner["monthly_review"]
+            monthly_review_html = (
+                f'<div style="background:#1f1a2e;border:1px solid #3a2d5a;border-radius:8px;'
+                f'padding:12px;margin-bottom:12px;">'
+                f'<div style="color:#d1b3ff;font-size:12px;font-weight:700;text-transform:uppercase;'
+                f'margin-bottom:6px;">Last Month Review</div>'
+                f'<div style="color:#e4e6f0;font-size:13px;line-height:1.5;">'
+                f'Monthly goals complete: {review["monthly_done"]}/{review["monthly_total"]}<br>'
+                f'Weekly goals complete: {review["weekly_done"]}/{review["weekly_total"]}'
+                f'</div></div>'
+            )
+
+        planner_html = (
+            f'{weekly_review_html}{monthly_review_html}'
+            f'<div style="background:#222539;border-radius:8px;padding:14px;margin-bottom:12px;">'
+            f'<div style="color:#4f8ef7;font-size:12px;font-weight:700;text-transform:uppercase;'
+            f'margin-bottom:8px;">Planner</div>'
+            f'<div style="color:#8b8fa8;font-size:12px;margin-bottom:10px;">'
+            f'Month {current_plan["month_start"]} · Week {current_plan["week_start"]} to {current_plan["week_end"]}'
+            f'</div>'
+            f'<div style="margin-bottom:10px;">'
+            f'<div style="color:#80cbc4;font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:4px;">Monthly Goals</div>'
+            f'{_planner_item_html("M", monthly_items, "No monthly goals set.")}'
+            f'</div>'
+            f'<div style="margin-bottom:10px;">'
+            f'<div style="color:#ffcc80;font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:4px;">Weekly Goals</div>'
+            f'{_planner_item_html("W", weekly_items, "No weekly goals set.")}'
+            f'</div>'
+            f'<div>'
+            f'<div style="color:#a5d6a7;font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:4px;">Top 3 Today</div>'
+            f'{_planner_item_html("P", daily_items, "No daily priorities set.")}'
+            f'</div>'
+            f'</div>'
+        )
+
     # Villain Challenge section
     villain_html = ""
     if villain.get("hero"):
@@ -606,8 +789,24 @@ def build_briefing_html(briefing: dict) -> str:
 
         # Monday weekly assignment
         weekly_html = ""
+        recap_html = ""
         if villain.get("is_monday") and villain.get("weekly_assignment"):
             wa = villain["weekly_assignment"]
+
+            # Battle recap narrative (LLM-generated bridge from last battle)
+            if villain.get("battle_recap_narrative"):
+                recap_text = villain["battle_recap_narrative"].replace("\n", "<br>")
+                recap_html = (
+                    f'<div style="background:#1a1a2e;border:1px solid #3a3a5e;border-radius:8px;'
+                    f'padding:14px;margin-bottom:12px;">'
+                    f'<div style="color:#bb86fc;font-size:13px;font-weight:700;'
+                    f'text-transform:uppercase;margin-bottom:8px;">'
+                    f'📜 Last Week\'s Battle Report</div>'
+                    f'<div style="color:#d0d0e8;font-size:13px;line-height:1.5;">'
+                    f'{recap_text}</div>'
+                    f'</div>'
+                )
+
             focus = ", ".join(d.replace("_", " ").title() for d in wa.get("domain_focus", []))
             weekly_html = (
                 f'<div style="background:#1a2a1a;border:1px solid #2d5a2d;border-radius:8px;'
@@ -639,7 +838,7 @@ def build_briefing_html(briefing: dict) -> str:
             )
             surge_html = f'<div style="margin-bottom:12px;">{surge_items}</div>'
 
-        villain_html = f'{hero_html}{surge_html}{weekly_html}{challenge_html}'
+        villain_html = f'{hero_html}{surge_html}{recap_html}{weekly_html}{challenge_html}'
     else:
         villain_html = '<p style="color:#8b8fa8;">Villain challenge system initializing...</p>'
 
@@ -661,6 +860,12 @@ def build_briefing_html(briefing: dict) -> str:
                     🌤 Weather
                 </h2>
                 {weather_html}
+
+                <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
+                           border-bottom:1px solid #2a2d42;padding-bottom:8px;">
+                    🗂 Planner
+                </h2>
+                {planner_html}
 
                 <h2 style="color:#e4e6f0;font-size:16px;margin:20px 0 12px;
                            border-bottom:1px solid #2a2d42;padding-bottom:8px;">
@@ -691,6 +896,8 @@ def build_briefing_html(briefing: dict) -> str:
                     📧 From Your Inbox
                 </h2>
                 {recs_html}
+
+                {spark_html}
             </div>
 
             <div style="padding:16px 30px;background:#1a1d2e;border-top:1px solid #2a2d42;">
@@ -722,6 +929,53 @@ def build_briefing_text(briefing: dict) -> str:
                          f"{day.get('condition','')}, {day.get('precip_chance',0)}% rain")
 
     lines.append("")
+
+    # Planner
+    planner = briefing.get("planner", {})
+    current_plan = planner.get("current_plan") or {}
+    if current_plan:
+        lines.append("PLANNER:")
+        lines.append(f"  Month: {current_plan['month_start']}")
+        lines.append(f"  Week: {current_plan['week_start']} to {current_plan['week_end']}")
+        if planner.get("weekly_review"):
+            review = planner["weekly_review"]
+            lines.append("  LAST WEEK REVIEW:")
+            lines.append(f"    Goals: {review['weekly_done']}/{review['weekly_total']}")
+            lines.append(f"    Priorities: {review['priorities_done']}/{review['priorities_total']}")
+            if review.get("avg_sleep") is not None:
+                lines.append(f"    Avg sleep: {review['avg_sleep']:.1f}%")
+            if review.get("avg_recovery") is not None:
+                lines.append(f"    Avg recovery: {review['avg_recovery']:.1f}%")
+        if planner.get("monthly_review"):
+            review = planner["monthly_review"]
+            lines.append("  LAST MONTH REVIEW:")
+            lines.append(f"    Monthly goals: {review['monthly_done']}/{review['monthly_total']}")
+            lines.append(f"    Weekly goals: {review['weekly_done']}/{review['weekly_total']}")
+
+        lines.append("  Monthly Goals:")
+        if current_plan.get("monthly"):
+            for item in current_plan["monthly"]:
+                check = "✓" if item["completed"] else "•"
+                lines.append(f"    {check} M{item['slot']}: {item['title']}")
+        else:
+            lines.append("    No monthly goals set.")
+
+        lines.append("  Weekly Goals:")
+        if current_plan.get("weekly"):
+            for item in current_plan["weekly"]:
+                check = "✓" if item["completed"] else "•"
+                lines.append(f"    {check} W{item['slot']}: {item['title']}")
+        else:
+            lines.append("    No weekly goals set.")
+
+        lines.append("  Top 3 Today:")
+        if current_plan.get("daily"):
+            for item in current_plan["daily"]:
+                check = "✓" if item["completed"] else "•"
+                lines.append(f"    {check} P{item['slot']}: {item['title']}")
+        else:
+            lines.append("    No daily priorities set.")
+        lines.append("")
 
     # Workout
     workout = briefing.get("workout", {})
@@ -764,6 +1018,13 @@ def build_briefing_text(briefing: dict) -> str:
         if villain.get("is_monday") and villain.get("weekly_assignment"):
             wa = villain["weekly_assignment"]
             focus = ", ".join(d.replace("_", " ").title() for d in wa.get("domain_focus", []))
+
+            # Battle recap narrative
+            if villain.get("battle_recap_narrative"):
+                lines.append("")
+                lines.append("  📜 LAST WEEK'S BATTLE REPORT:")
+                lines.append(f"  {villain['battle_recap_narrative']}")
+
             lines.append("")
             lines.append(f"  ⚔ NEW WEEKLY CHALLENGE: {wa['villain_name']} ({wa['tier']})")
             lines.append(f"  Intel: {wa['description']}")
@@ -822,8 +1083,20 @@ def build_briefing_text(briefing: dict) -> str:
         lines.append(f"    From: {r.get('source_subject', '')}")
     if not recs.get("recommendations"):
         lines.append("  No actionable items found.")
+    lines.append("")
 
-    lines.extend(["", "=" * 50, "Sent by PAI Orchestrator"])
+    # Idea Spark
+    idea_spark = briefing.get("idea_spark", {})
+    if idea_spark.get("spark"):
+        lines.append("💡 DAILY SPARK:")
+        lines.append(f"  {idea_spark['spark']}")
+        if idea_spark.get("digest"):
+            lines.append("")
+            lines.append("  📋 IDEA DIGEST:")
+            lines.append(f"  {idea_spark['digest']}")
+        lines.append("")
+
+    lines.extend(["=" * 50, "Sent by PAI Orchestrator"])
     return "\n".join(lines)
 
 

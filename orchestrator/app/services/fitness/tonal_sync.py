@@ -26,7 +26,7 @@ async def sync_tonal() -> dict:
     if not settings.tonal_email or not settings.tonal_password:
         return {"status": "skipped", "reason": "no tonal credentials configured"}
 
-    summary = {"workouts": 0, "strength_scores": 0, "errors": []}
+    summary = {"workouts": 0, "strength_scores": 0, "new_prs": 0, "errors": []}
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -57,7 +57,9 @@ async def sync_tonal() -> dict:
 
             # Sync workouts
             try:
-                summary["workouts"] = await _sync_workouts(client, headers, user_id)
+                workout_result = await _sync_workouts(client, headers, user_id)
+                summary["workouts"] = workout_result["count"]
+                summary["new_prs"] = workout_result["new_prs"]
             except Exception as e:
                 logger.error("tonal_workout_sync_failed", extra={"error": str(e)})
                 summary["errors"].append(f"workouts: {e}")
@@ -69,6 +71,12 @@ async def sync_tonal() -> dict:
                 logger.error("tonal_strength_sync_failed", extra={"error": str(e)})
                 summary["errors"].append(f"strength: {e}")
 
+            # Sync movement names into PR records
+            try:
+                await _sync_movement_names(client, headers)
+            except Exception as e:
+                logger.warning("tonal_movement_names_failed", extra={"error": str(e)})
+
     except Exception as e:
         logger.error("tonal_sync_failed", extra={"error": str(e)})
         summary["errors"].append(str(e))
@@ -78,9 +86,10 @@ async def sync_tonal() -> dict:
     return summary
 
 
-async def _sync_workouts(client: httpx.AsyncClient, headers: dict, user_id: str) -> int:
-    """Fetch and store Tonal workout activities."""
+async def _sync_workouts(client: httpx.AsyncClient, headers: dict, user_id: str) -> dict:
+    """Fetch and store Tonal workout activities. Returns count and new PRs."""
     count = 0
+    new_prs = 0
     offset = 0
     limit = 100
 
@@ -116,6 +125,7 @@ async def _sync_workouts(client: httpx.AsyncClient, headers: dict, user_id: str)
                     "one_rep_max": s.get("oneRepMax"),
                     "rom": s.get("rangeOfMotion"),
                     "movement_id": s.get("movementId"),
+                    "movement_name": s.get("movementName", s.get("name", "")),
                 })
 
             start_time = w.get("beginTime")
@@ -139,11 +149,16 @@ async def _sync_workouts(client: httpx.AsyncClient, headers: dict, user_id: str)
             )
             count += 1
 
+            # Check for PRs in this workout's sets
+            workout_time = _parse_dt(start_time) or datetime.now(timezone.utc)
+            prs = await _check_prs(sets_clean, workout_time, str(external_id))
+            new_prs += prs
+
         offset += limit
         if offset >= total:
             break
 
-    return count
+    return {"count": count, "new_prs": new_prs}
 
 
 async def _sync_strength_scores(client: httpx.AsyncClient, headers: dict, user_id: str) -> int:
@@ -213,6 +228,185 @@ async def _sync_strength_scores(client: httpx.AsyncClient, headers: dict, user_i
             count += 1
 
     return count
+
+
+# ── Movement names ──
+
+
+async def _sync_movement_names(client: httpx.AsyncClient, headers: dict):
+    """Fetch movement catalog and update PR records with exercise names."""
+    resp = await client.get(f"{API_BASE}/v6/movements", headers=headers)
+    if resp.status_code != 200:
+        return
+
+    movements = resp.json()
+    if not isinstance(movements, list):
+        return
+
+    # Build lookup: id -> name
+    name_map = {m["id"]: m.get("name", "") for m in movements if m.get("id") and m.get("name")}
+
+    if not name_map:
+        return
+
+    # Update any PR records that are missing names
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT id, movement_id FROM exercise_prs
+            WHERE (movement_name IS NULL OR movement_name = '')
+                AND platform = 'tonal'
+        """))
+        unnamed = r.mappings().fetchall()
+
+        updated = 0
+        for row in unnamed:
+            name = name_map.get(row["movement_id"])
+            if name:
+                await session.execute(text("""
+                    UPDATE exercise_prs SET movement_name = :name WHERE id = :id
+                """), {"name": name, "id": row["id"]})
+                updated += 1
+
+        if updated:
+            await session.commit()
+            logger.info("movement_names_synced", extra={"updated": updated, "total_unnamed": len(unnamed)})
+
+
+# ── PR tracking ──
+
+
+async def _check_prs(sets: list[dict], workout_time: datetime, workout_id: str) -> int:
+    """Check sets for new personal records. Returns count of new PRs."""
+    new_prs = 0
+    # Group by movement_id and find best 1RM per movement in this workout
+    movement_bests: dict[str, dict] = {}
+    for s in sets:
+        mid = s.get("movement_id")
+        orm = s.get("one_rep_max")
+        if not mid or not orm:
+            continue
+        orm = float(orm)
+        if mid not in movement_bests or orm > movement_bests[mid]["value"]:
+            movement_bests[mid] = {
+                "value": orm,
+                "reps": s.get("reps", 1),
+                "name": s.get("movement_name", ""),
+            }
+
+    if not movement_bests:
+        return 0
+
+    async with async_session() as session:
+        for mid, best in movement_bests.items():
+            # Check current PR
+            r = await session.execute(text("""
+                SELECT value, movement_name FROM exercise_prs
+                WHERE movement_id = :mid AND platform = 'tonal' AND pr_type = 'one_rep_max'
+            """), {"mid": mid})
+            existing = r.mappings().fetchone()
+
+            if existing is None:
+                # First time — insert as new PR
+                await session.execute(text("""
+                    INSERT INTO exercise_prs
+                        (movement_id, movement_name, platform, pr_type, value, reps, workout_id, achieved_at)
+                    VALUES (:mid, :name, 'tonal', 'one_rep_max', :value, :reps, :wid, :achieved)
+                """), {
+                    "mid": mid,
+                    "name": best["name"],
+                    "value": best["value"],
+                    "reps": best["reps"],
+                    "wid": workout_id,
+                    "achieved": workout_time,
+                })
+                new_prs += 1
+            elif best["value"] > float(existing["value"]):
+                # New PR! Update
+                prev_val = float(existing["value"])
+                # Keep movement name if we have a better one
+                name = best["name"] or existing["movement_name"] or ""
+                await session.execute(text("""
+                    UPDATE exercise_prs
+                    SET value = :value, previous_value = :prev, reps = :reps,
+                        movement_name = :name, workout_id = :wid, achieved_at = :achieved
+                    WHERE movement_id = :mid AND platform = 'tonal' AND pr_type = 'one_rep_max'
+                """), {
+                    "value": best["value"],
+                    "prev": prev_val,
+                    "reps": best["reps"],
+                    "name": name,
+                    "wid": workout_id,
+                    "achieved": workout_time,
+                    "mid": mid,
+                })
+                new_prs += 1
+                logger.info("new_pr_detected", extra={
+                    "movement_id": mid,
+                    "movement_name": name,
+                    "new_value": best["value"],
+                    "previous_value": prev_val,
+                })
+            else:
+                # Update movement name if we now have one
+                if best["name"] and not existing["movement_name"]:
+                    await session.execute(text("""
+                        UPDATE exercise_prs SET movement_name = :name
+                        WHERE movement_id = :mid AND platform = 'tonal' AND pr_type = 'one_rep_max'
+                    """), {"name": best["name"], "mid": mid})
+
+        await session.commit()
+
+    return new_prs
+
+
+async def backfill_prs() -> dict:
+    """Scan all existing Tonal workout data and establish PR baselines."""
+    async with async_session() as session:
+        # Get all workouts ordered by date (oldest first so PRs accumulate correctly)
+        r = await session.execute(text("""
+            SELECT external_id, sets, start_time
+            FROM fitness_strength
+            WHERE platform = 'tonal'
+                AND workout_type NOT IN ('ASSESSMENT', 'SCORE_HISTORY')
+                AND jsonb_array_length(sets) > 0
+            ORDER BY start_time ASC
+        """))
+        workouts = r.mappings().fetchall()
+
+    total_prs = 0
+    for w in workouts:
+        sets = json.loads(w["sets"]) if isinstance(w["sets"], str) else w["sets"]
+        workout_time = w["start_time"]
+        prs = await _check_prs(sets, workout_time, str(w["external_id"]))
+        total_prs += prs
+
+    logger.info("pr_backfill_complete", extra={"workouts_scanned": len(workouts), "prs_established": total_prs})
+    return {"workouts_scanned": len(workouts), "prs_established": total_prs}
+
+
+async def get_all_prs() -> list[dict]:
+    """Get all current personal records."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT movement_id, movement_name, value, previous_value, reps, achieved_at
+            FROM exercise_prs
+            WHERE platform = 'tonal' AND pr_type = 'one_rep_max'
+            ORDER BY value DESC
+        """))
+        return [dict(row) for row in r.mappings().fetchall()]
+
+
+async def get_recent_prs(days: int = 7) -> list[dict]:
+    """Get PRs achieved in the last N days."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT movement_id, movement_name, value, previous_value, reps, achieved_at
+            FROM exercise_prs
+            WHERE platform = 'tonal' AND pr_type = 'one_rep_max'
+                AND achieved_at >= NOW() - CAST(:days || ' days' AS interval)
+            ORDER BY achieved_at DESC
+        """), {"days": str(days)})
+        return [dict(row) for row in r.mappings().fetchall()]
 
 
 # ── DB helpers ──

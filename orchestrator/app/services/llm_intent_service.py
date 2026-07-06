@@ -131,6 +131,14 @@ async def classify_chat_intent(
     if re.search(r'(completed|did|done)\s*(mobility|stretch)', lower) or re.search(r'(mobility\s*(done|complete)|met\s+\d+%\s*(nutrition|diet))', lower):
         return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
 
+    # Fast pre-classifier: idea factory commands
+    if re.match(r'(?:new\s+)?idea[:\s]', lower) or re.match(r'challenge[:\s]', lower):
+        return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(list|show|my)\s+ideas?\b', lower) or re.search(r'\bidea\s+retro', lower):
+        return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
+    if re.match(r'(advance|kill)\s+idea', lower):
+        return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
+
     try:
         system_prompt = _build_classifier_prompt()
         tools = _build_tool_def()

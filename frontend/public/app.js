@@ -239,6 +239,11 @@ async function initApp() {
     document.getElementById('workout-programs-btn').addEventListener('click', loadWorkoutPrograms);
     document.getElementById('workout-logs-btn').addEventListener('click', loadWorkoutLogs);
 
+    // Receipt mode buttons
+    document.getElementById('receipt-upload').addEventListener('change', handleReceiptUpload);
+    document.getElementById('receipts-summary-btn').addEventListener('click', loadReceiptSummary);
+    document.getElementById('receipts-list-btn').addEventListener('click', loadReceiptList);
+
     // Conversation management
     document.getElementById('new-chat-btn').addEventListener('click', startNewChat);
     document.getElementById('logout-btn').addEventListener('click', logout);
@@ -1571,6 +1576,99 @@ async function handleHomeUpload(event) {
     } catch (e) {
         loadingEl.remove();
         addMessage(`Upload error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+
+// ── Receipts Mode ──
+
+async function handleReceiptUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+
+    const loadingEl = addLoading();
+    addMessage(`Uploading receipt "${file.name}"...`, 'user');
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const resp = await fetch(`${API}/skills/receipts/upload`, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        loadingEl.remove();
+        if (data.error) {
+            addMessage(`Receipt error: ${data.error}`, 'ai', 'error');
+            return;
+        }
+        const amt = data.amount ? `$${data.amount.toFixed(2)}` : 'unknown amount';
+        addMessage(
+            `🧾 **Receipt captured!**\n` +
+            `- **Vendor:** ${data.vendor || 'Unknown'}\n` +
+            `- **Amount:** ${amt}\n` +
+            `- **Category:** ${(data.category || 'other').replace(/_/g, ' ')}\n` +
+            `- **Date:** ${data.date || 'Unknown'}\n` +
+            `- **Tax Year:** ${data.tax_year}\n\n` +
+            `Receipt #${data.id} saved. Ask "tax summary" to see totals.`,
+            'ai', 'receipts'
+        );
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Receipt upload error: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function loadReceiptSummary() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/receipts/summary`);
+        if (!resp.ok) throw new Error(`${resp.status}`);
+        const data = await resp.json();
+        loadingEl.remove();
+        if (!data.total_receipts) {
+            addMessage('No receipts uploaded yet. Use the Upload Receipt button to get started.', 'ai', 'receipts');
+            return;
+        }
+        let msg = `**Tax Receipt Summary — ${data.tax_year}**\n\n`;
+        msg += `Total: **$${data.grand_total.toFixed(2)}** across ${data.total_receipts} receipts\n\n`;
+        for (const cat of data.by_category) {
+            const name = cat.category.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            msg += `  ${name}: $${(cat.total || 0).toFixed(2)} (${cat.count})\n`;
+        }
+        addMessage(msg, 'ai', 'receipts');
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error loading summary: ${e.message}`, 'ai', 'error');
+    }
+}
+
+async function loadReceiptList() {
+    const loadingEl = addLoading();
+    try {
+        const resp = await fetch(`${API}/skills/receipts?limit=20`);
+        if (!resp.ok) throw new Error(`${resp.status}`);
+        const receipts = await resp.json();
+        loadingEl.remove();
+        if (!receipts.length) {
+            addMessage('No receipts uploaded yet.', 'ai', 'receipts');
+            return;
+        }
+        let msg = `**Recent Receipts** (${receipts.length}):\n\n`;
+        let total = 0;
+        for (const r of receipts) {
+            const amt = r.amount ? `$${r.amount.toFixed(2)}` : '?';
+            const dt = r.receipt_date ? r.receipt_date.slice(5) : '?';
+            const cat = (r.category || 'other').replace(/_/g, ' ');
+            msg += `  #${r.id} ${dt} — **${r.vendor || 'Unknown'}** — ${amt} [${cat}]\n`;
+            total += r.amount || 0;
+        }
+        msg += `\n  **Total: $${total.toFixed(2)}**`;
+        addMessage(msg, 'ai', 'receipts');
+    } catch (e) {
+        loadingEl.remove();
+        addMessage(`Error loading receipts: ${e.message}`, 'ai', 'error');
     }
 }
 

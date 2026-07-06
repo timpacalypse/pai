@@ -437,3 +437,125 @@ async def _get_recent_villain_ids(weeks: int = 4) -> set[str]:
             WHERE week_start > CURRENT_DATE - CAST(:days AS INTEGER) * INTERVAL '1 day'
         """), {"days": days})
         return {row[0] for row in r.fetchall()}
+
+
+async def pause_challenge() -> dict | None:
+    """Pause the current active challenge (e.g. for vacation)."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            UPDATE villain_challenges SET status = 'paused'
+            WHERE status = 'active'
+            RETURNING id, villain_name
+        """))
+        await session.commit()
+        row = r.mappings().fetchone()
+        return dict(row) if row else None
+
+
+async def resume_challenge() -> dict | None:
+    """Resume a paused challenge."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            UPDATE villain_challenges SET status = 'active'
+            WHERE status = 'paused'
+            RETURNING id, villain_name
+        """))
+        await session.commit()
+        row = r.mappings().fetchone()
+        return dict(row) if row else None
+
+
+async def get_paused_challenge() -> dict | None:
+    """Check if there's a paused challenge."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT id, villain_name, week_start, week_end
+            FROM villain_challenges WHERE status = 'paused'
+            ORDER BY week_start DESC LIMIT 1
+        """))
+        row = r.mappings().fetchone()
+        return dict(row) if row else None
+
+
+async def schedule_pause(pause_start, pause_end, reason: str = "") -> dict:
+    """Schedule a future pause (e.g. for an upcoming vacation)."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            INSERT INTO challenge_pause_schedule (pause_start, pause_end, reason)
+            VALUES (:start, :end, :reason)
+            RETURNING id, pause_start, pause_end, reason, status
+        """), {"start": pause_start, "end": pause_end, "reason": reason})
+        await session.commit()
+        return dict(r.mappings().fetchone())
+
+
+async def get_scheduled_pauses() -> list[dict]:
+    """Get all scheduled (future) pauses."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT id, pause_start, pause_end, reason, status
+            FROM challenge_pause_schedule
+            WHERE status = 'scheduled'
+            ORDER BY pause_start ASC
+        """))
+        return [dict(row) for row in r.mappings().fetchall()]
+
+
+async def cancel_scheduled_pause(pause_id: int) -> bool:
+    """Cancel a scheduled pause."""
+    async with async_session() as session:
+        r = await session.execute(text("""
+            DELETE FROM challenge_pause_schedule WHERE id = :id AND status = 'scheduled'
+        """), {"id": pause_id})
+        await session.commit()
+        return r.rowcount > 0
+
+
+async def check_scheduled_pauses():
+    """Check if any scheduled pauses should activate or deactivate today."""
+    from datetime import date as dt_date
+    today = dt_date.today()
+
+    async with async_session() as session:
+        # Activate pauses that start today
+        r = await session.execute(text("""
+            SELECT id FROM challenge_pause_schedule
+            WHERE status = 'scheduled' AND pause_start <= :today AND pause_end >= :today
+        """), {"today": today})
+        to_activate = r.fetchall()
+
+        for row in to_activate:
+            await session.execute(text("""
+                UPDATE challenge_pause_schedule SET status = 'active' WHERE id = :id
+            """), {"id": row[0]})
+
+        if to_activate:
+            # Pause the active challenge
+            await session.execute(text("""
+                UPDATE villain_challenges SET status = 'paused' WHERE status = 'active'
+            """))
+            await session.commit()
+            return "paused"
+
+        # Resume pauses that ended
+        r = await session.execute(text("""
+            SELECT id FROM challenge_pause_schedule
+            WHERE status = 'active' AND pause_end < :today
+        """), {"today": today})
+        to_complete = r.fetchall()
+
+        for row in to_complete:
+            await session.execute(text("""
+                UPDATE challenge_pause_schedule SET status = 'completed' WHERE id = :id
+            """), {"id": row[0]})
+
+        if to_complete:
+            # Resume the paused challenge
+            await session.execute(text("""
+                UPDATE villain_challenges SET status = 'active' WHERE status = 'paused'
+            """))
+            await session.commit()
+            return "resumed"
+
+        await session.commit()
+        return None

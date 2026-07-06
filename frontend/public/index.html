@@ -60,6 +60,7 @@
                     <button class="mode-btn" data-mode="recipes">Recipes</button>
                     <button class="mode-btn" data-mode="calendar">Calendar</button>
                     <button class="mode-btn" data-mode="workout">Workout</button>
+                    <button class="mode-btn" data-mode="receipts">Receipts</button>
                     <button class="mode-btn" data-mode="skills">Skills</button>
                 </div>
             </div>
@@ -134,6 +135,15 @@
                 <button id="workout-today-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Today's Workout</button>
                 <button id="workout-programs-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">View Programs</button>
                 <button id="workout-logs-btn" class="secondary-btn" style="width:100%">Recent Logs</button>
+            </div>
+
+            <div id="receipts-options" class="sidebar-section hidden">
+                <label class="upload-btn secondary-btn" style="width:100%;margin-bottom:8px;display:block;text-align:center;cursor:pointer">
+                    Upload Receipt
+                    <input type="file" id="receipt-upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" style="display:none">
+                </label>
+                <button id="receipts-summary-btn" class="secondary-btn" style="width:100%;margin-bottom:8px">Tax Summary</button>
+                <button id="receipts-list-btn" class="secondary-btn" style="width:100%">View Receipts</button>
             </div>
 
             <div id="skills-options" class="sidebar-section hidden">
