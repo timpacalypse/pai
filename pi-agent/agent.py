@@ -46,8 +46,10 @@ SAMPLE_RATE = 16000          # Hz — whisper and wake-word both expect 16kHz
 CHANNELS = 1
 CHUNK_SECONDS = 0.08         # 80ms chunks for wake-word inference
 SILENCE_THRESHOLD = 0.006    # RMS below this = silence
-SILENCE_AFTER_SPEECH = 1.6   # seconds of silence before stopping recording
-MAX_RECORD_SECONDS = 30      # safety cap on recording
+SILENCE_AFTER_SPEECH = 1.2   # seconds of silence before stopping recording
+MAX_RECORD_SECONDS = 12      # safety cap — never send more than 12s to STT
+MIN_SPEECH_SECONDS = 0.4     # discard turns shorter than this (background noise)
+VOICE_TURN_TIMEOUT = 90      # max seconds to wait for orchestrator turn response
 WAKE_WORD = os.environ.get("WAKE_WORD", "aegis")
 # openWakeWord fallback (if Vosk model dir not present)
 WAKE_MODEL = os.environ.get("WAKE_MODEL", "hey_jarvis")
@@ -184,8 +186,8 @@ def _np_to_wav_bytes(audio: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
 def record_until_silence(
     max_seconds: float = MAX_RECORD_SECONDS,
     silence_after: float = SILENCE_AFTER_SPEECH,
-) -> np.ndarray:
-    """Record from microphone until silence is detected."""
+) -> np.ndarray | None:
+    """Record from microphone until silence. Returns None if no speech detected."""
     logger.info("Recording started — speak now")
     frames = []
     silent_chunks = 0
@@ -193,7 +195,6 @@ def record_until_silence(
     chunks_per_second = int(1.0 / CHUNK_SECONDS)
     silence_chunk_limit = int(silence_after * chunks_per_second)
     max_chunks = int(max_seconds * chunks_per_second)
-
     chunk_size = int(SAMPLE_RATE * CHUNK_SECONDS)
 
     with sd.InputStream(
@@ -218,6 +219,12 @@ def record_until_silence(
     audio = np.concatenate(frames, axis=0).flatten()
     duration = len(audio) / SAMPLE_RATE
     logger.info(f"Recording complete: {duration:.1f}s (rms={_rms(audio):.4f})")
+
+    # Discard if too short — likely background noise or accidental wake
+    if not speaking or duration < MIN_SPEECH_SECONDS:
+        logger.info("No speech detected — skipping turn")
+        return None
+
     return audio
 
 
@@ -227,8 +234,8 @@ async def call_voice_turn(audio: np.ndarray) -> dict | None:
     """POST audio to PAI orchestrator /voice/turn, get response."""
     audio = _normalize_for_stt(audio)
     wav_bytes = _np_to_wav_bytes(audio)
-    async with httpx.AsyncClient(timeout=180.0) as client:  # long: whisper cold-starts can take >60s
-        try:
+    try:
+        async with httpx.AsyncClient(timeout=VOICE_TURN_TIMEOUT) as client:
             resp = await client.post(
                 f"{PAI_HOST}/voice/turn",
                 files={"audio": ("recording.wav", wav_bytes, "audio/wav")},
@@ -236,9 +243,12 @@ async def call_voice_turn(audio: np.ndarray) -> dict | None:
             )
             resp.raise_for_status()
             return resp.json()
-        except httpx.HTTPError as e:
-            logger.error(f"PAI orchestrator call failed: {e}")
-            return None
+    except httpx.HTTPError as e:
+        logger.error(f"PAI orchestrator call failed: {e}")
+        return None
+    except asyncio.TimeoutError:
+        logger.error(f"Voice turn timed out after {VOICE_TURN_TIMEOUT}s")
+        return None
 
 
 async def notify_wake() -> None:
@@ -262,35 +272,56 @@ async def notify_sleep() -> None:
 # ── TTS playback ──────────────────────────────────────────────────────────────
 
 def play_audio_b64(audio_b64: str) -> None:
-    """Decode base64 WAV from orchestrator TTS and play through speaker."""
+    """Decode base64 WAV and play via subprocess to avoid pygame freeze on Windows."""
+    import subprocess
     try:
-        import pygame
         wav_bytes = base64.b64decode(audio_b64)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(wav_bytes)
             tmp = f.name
-        pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=1024)
-        pygame.mixer.music.load(tmp)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.05)
-        pygame.mixer.quit()
+
+        if sys.platform == "win32":
+            # Use Windows built-in media player — no dependencies, never freezes
+            subprocess.run(
+                ["powershell", "-c",
+                 f"(New-Object Media.SoundPlayer '{tmp}').PlaySync()"],
+                timeout=30,
+                check=False,
+            )
+        else:
+            # Linux/Mac: try aplay, then ffplay
+            for cmd in (["aplay", tmp], ["ffplay", "-nodisp", "-autoexit", tmp]):
+                try:
+                    subprocess.run(cmd, timeout=30, check=True,
+                                   capture_output=True)
+                    break
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    continue
+
         os.unlink(tmp)
     except Exception as e:
         logger.warning(f"Audio playback failed: {e}")
 
 
 def speak_fallback(text: str) -> None:
-    """Fallback TTS using espeak directly (always available on Pi)."""
+    """Fallback TTS using espeak or Windows SAPI."""
+    import subprocess
     try:
-        import subprocess
-        subprocess.run(
-            ["espeak-ng", "-v", "en-us", "-s", "145", text],
-            check=True,
-            timeout=15,
-        )
+        if sys.platform == "win32":
+            subprocess.run(
+                ["powershell", "-c",
+                 f"Add-Type -AssemblyName System.Speech; "
+                 f"(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{text}')"],
+                timeout=20,
+                check=False,
+            )
+        else:
+            subprocess.run(
+                ["espeak-ng", "-v", "en-us", "-s", "145", text],
+                check=True, timeout=15,
+            )
     except Exception as e:
-        logger.warning(f"espeak fallback failed: {e}")
+        logger.warning(f"speak_fallback failed: {e}")
 
 
 def play_response(result: dict) -> None:
@@ -386,8 +417,22 @@ async def run():
             loop = asyncio.get_event_loop()
             audio = await loop.run_in_executor(None, record_until_silence)
 
-            # Phase 4: Send to PAI, get response
-            result = await call_voice_turn(audio)
+            # Discard empty/too-short recordings
+            if audio is None:
+                await notify_sleep()
+                continue
+
+            # Phase 4: Send to PAI, get response — hard timeout guards against freeze
+            try:
+                result = await asyncio.wait_for(
+                    call_voice_turn(audio),
+                    timeout=VOICE_TURN_TIMEOUT + 5,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Voice turn hard-timeout — agent recovering")
+                await notify_sleep()
+                continue
+
             if not result:
                 logger.warning("No response from PAI")
                 await notify_sleep()
