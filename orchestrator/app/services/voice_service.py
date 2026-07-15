@@ -23,6 +23,15 @@ from typing import Optional
 
 logger = logging.getLogger("pai.voice")
 
+# JARVIS-style persona for all voice responses
+_VOICE_SYSTEM_PROMPT = (
+    "You are AEGIS, a sophisticated personal AI assistant modeled after JARVIS from Iron Man. "
+    "You speak with a composed, slightly formal British cadence — polished but warm. "
+    "Address the user as 'sir' occasionally but not excessively. "
+    "Be concise (1-3 sentences for voice), helpful, and subtly witty when appropriate. "
+    "Never use markdown, bullet points, or formatting. Speak in natural sentences suitable for text-to-speech."
+)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # State model
@@ -126,15 +135,13 @@ async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/wav") -> 
         return None
 
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(audio_bytes)
-            tmp_path = f.name
+        # Feed audio via in-memory buffer — avoids temp file I/O
+        audio_stream = io.BytesIO(audio_bytes)
 
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, lambda: list(model.transcribe(tmp_path, beam_size=1)[0])
+            None, lambda: list(model.transcribe(audio_stream, beam_size=1)[0])
         )
-        os.unlink(tmp_path)
 
         text = " ".join(seg.text.strip() for seg in result).strip()
         logger.info("transcription_complete", extra={"chars": len(text)})
@@ -188,7 +195,7 @@ async def generate_voice_response(
                     )
                     return await generate(
                         prompt=prompt,
-                        system_prompt="You are AEGIS, a personal AI assistant. Speak naturally and concisely.",
+                        system_prompt=_VOICE_SYSTEM_PROMPT,
                         http_client=http_client,
                     )
             except Exception as e:
@@ -198,7 +205,7 @@ async def generate_voice_response(
     from app.services.ollama_service import generate
     return await generate(
         prompt=text,
-        system_prompt="You are AEGIS, a personal AI assistant. Respond naturally in 1-3 sentences. No markdown.",
+        system_prompt=_VOICE_SYSTEM_PROMPT,
         http_client=http_client,
     )
 

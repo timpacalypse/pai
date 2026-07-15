@@ -105,6 +105,8 @@ async def _run_competition(
     agent_names: list[str],
     retrieved_context: list[str] | None = None,
     strategy: AdjudicationStrategy = AdjudicationStrategy.best_score,
+    *,
+    intent_value: str | None = None,
 ) -> tuple[dict | None, str]:
     """
     Multi-agent competition:
@@ -154,13 +156,19 @@ async def _run_competition(
         },
     )
 
-    # 3b. Persist quality scores
+    # 3b. Persist quality scores + procedural memory (reuse caller's intent)
+    _intent_val = intent_value
+    if not _intent_val:
+        try:
+            _intent_val = (await classify_intent(request.input)).value
+        except Exception:
+            _intent_val = "unknown"
+
     try:
-        intent = await classify_intent(request.input)
         model = select_model(request.input)
         await store_scores(
             request_id=request.request_id,
-            intent=intent.value,
+            intent=_intent_val,
             workflow="multi_agent_competition",
             model=model,
             scores=[s.model_dump() for s in result.scores],
@@ -169,11 +177,9 @@ async def _run_competition(
     except Exception as e:
         logger.warning("quality_store_failed", extra={"error": str(e)})
 
-    # 3c. Record procedural memory
     try:
-        intent_val = (await classify_intent(request.input)).value
         avg = sum(s.total for s in result.scores) / max(len(result.scores), 1)
-        await record_outcome(intent_val, "multi_agent_competition", agent_names, avg)
+        await record_outcome(_intent_val, "multi_agent_competition", agent_names, avg)
     except Exception as e:
         logger.warning("procedural_record_failed: %s", str(e))
 
@@ -335,6 +341,7 @@ async def handle_task(
         structured, content = await _run_competition(
             request, roles, http_client, selected_agents, retrieved_context,
             strategy=AdjudicationStrategy.synthesize,
+            intent_value=intent.value,
         )
 
     elif workflow in (WorkflowType.agent_research, WorkflowType.agent_analysis, WorkflowType.agent_planning):

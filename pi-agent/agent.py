@@ -54,7 +54,7 @@ WAKE_WORD = os.environ.get("WAKE_WORD", "aegis")
 # openWakeWord fallback (if Vosk model dir not present)
 WAKE_MODEL = os.environ.get("WAKE_MODEL", "hey_jarvis")
 WAKE_THRESHOLD = float(os.environ.get("WAKE_THRESHOLD", "0.5"))
-VOSK_PARTIAL_HITS_REQUIRED = int(os.environ.get("VOSK_PARTIAL_HITS_REQUIRED", "2"))
+VOSK_PARTIAL_HITS_REQUIRED = int(os.environ.get("VOSK_PARTIAL_HITS_REQUIRED", "4"))
 
 
 def _parse_audio_device(raw: str | None):
@@ -253,10 +253,15 @@ async def call_voice_turn(audio: np.ndarray) -> dict | None:
 
 
 async def notify_wake() -> None:
-    """Tell orchestrator we heard the wake word."""
+    """Tell orchestrator we heard the wake word and play the wake greeting if returned."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(f"{PAI_HOST}/voice/wake")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{PAI_HOST}/voice/wake")
+            if resp.status_code == 200:
+                data = resp.json()
+                audio = data.get("audio")
+                if audio:
+                    play_audio_b64(audio)
     except Exception:
         pass
 
@@ -350,7 +355,7 @@ async def listen_for_wake_word() -> bool:
     vosk_rec = _get_vosk_recognizer()
     if vosk_rec is not None:
         logger.info(f"Listening for wake word '{WAKE_WORD}' via Vosk ...")
-        buf_size = 4000  # ~0.25s at 16kHz
+        buf_size = 8000  # ~0.5s at 16kHz — longer buffer for more stable detection
         partial_hits = 0
         with sd.RawInputStream(
             samplerate=SAMPLE_RATE,

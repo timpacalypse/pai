@@ -86,14 +86,14 @@ def select_agents_for_task(prompt: str, intent: IntentType) -> list[str]:
     complexity = _estimate_complexity(lower)
 
     # If complexity is high and we only have one agent, add complementary ones
-    if complexity >= 2 and len(agents) <= 1:
+    if complexity >= 3 and len(agents) <= 1:
         if "research" not in agents:
             agents.append("research")
         if "analysis" not in agents:
             agents.append("analysis")
 
     # Very high complexity gets planning too
-    if complexity >= 3 and "planning" not in agents:
+    if complexity >= 4 and "planning" not in agents:
         agents.append("planning")
 
     # ── Fallback ──

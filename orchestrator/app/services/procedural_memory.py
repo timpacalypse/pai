@@ -66,7 +66,7 @@ async def record_outcome(
     logger.info("procedural_recorded", extra={"pattern": workflow_name, "agents": agents_str, "score": avg_score})
 
 
-async def lookup_proven_workflow(intent: str, min_uses: int = 3, min_score: float = 0.5) -> dict | None:
+async def lookup_proven_workflow(intent: str, min_uses: int = 2, min_score: float = 0.45) -> dict | None:
     """Look up the best proven workflow pattern for a given intent."""
     async with async_session() as session:
         result = await session.execute(

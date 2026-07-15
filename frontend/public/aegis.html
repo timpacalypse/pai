@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AEGIS Interface Prototype</title>
-    <link rel="stylesheet" href="aegis.css?v=20260713c">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AEGIS</title>
+    <link rel="stylesheet" href="aegis.css?v=20260715a">
 </head>
 <body>
     <div class="radial-core" aria-hidden="true"></div>
@@ -12,6 +12,25 @@
     <div class="grid-overlay" aria-hidden="true"></div>
 
     <main class="shell state-sleeping" id="shell" data-state="sleeping">
+        <!-- Dashboard panels (10.1" touch-optimized) -->
+        <aside class="dash-panel dash-left">
+            <div class="dash-card" id="card-time">
+                <div class="dash-label">TIME</div>
+                <div class="dash-value" id="dash-clock">--:--</div>
+                <div class="dash-sub" id="dash-date">---</div>
+            </div>
+            <div class="dash-card" id="card-weather">
+                <div class="dash-label">CONDITIONS</div>
+                <div class="dash-value" id="dash-weather">--</div>
+                <div class="dash-sub" id="dash-temp">--°F</div>
+            </div>
+            <div class="dash-card" id="card-calendar">
+                <div class="dash-label">NEXT EVENT</div>
+                <div class="dash-value" id="dash-event">--</div>
+                <div class="dash-sub" id="dash-event-time">--</div>
+            </div>
+        </aside>
+
         <div class="interface-center">
             <section class="display-stage" aria-label="AEGIS visual core">
                 <svg class="network-layer" id="network-svg" viewBox="0 0 1600 980" preserveAspectRatio="xMidYMid meet">
@@ -63,8 +82,33 @@
                     <div class="orb-center"></div>
                     <div class="orb-inner-core"></div>
                 </div>
+
+                <!-- Voice state label below orb -->
+                <div class="orb-state-label" id="orb-state-label">DORMANT</div>
             </section>
         </div>
+
+        <aside class="dash-panel dash-right">
+            <div class="dash-card" id="card-transcript">
+                <div class="dash-label">LAST EXCHANGE</div>
+                <div class="dash-transcript" id="dash-transcript">Awaiting input...</div>
+            </div>
+            <div class="dash-card" id="card-response">
+                <div class="dash-label">AEGIS RESPONSE</div>
+                <div class="dash-transcript" id="dash-response">--</div>
+            </div>
+            <div class="dash-card" id="card-system">
+                <div class="dash-label">SYSTEM</div>
+                <div class="dash-value" id="dash-status">ONLINE</div>
+                <div class="dash-sub" id="dash-model">qwen3:8b</div>
+            </div>
+        </aside>
+
+        <!-- Touch wake button (for touchscreen) -->
+        <button class="wake-btn" id="wake-btn" aria-label="Wake AEGIS">
+            <span class="wake-btn-ring"></span>
+            <span class="wake-btn-label">AEGIS</span>
+        </button>
 
         <form class="command-line" id="command-form">
             <input
@@ -78,6 +122,6 @@
         </form>
     </main>
 
-    <script src="aegis.js?v=20260713c"></script>
+    <script src="aegis.js?v=20260715a"></script>
 </body>
 </html>

@@ -121,23 +121,64 @@ async def classify_chat_intent(
     import re
     lower = message.lower()
 
-    # Fast pre-classifier: check-in messages always route to villain_challenge
+    # ── Fast pre-classifier: regex fast-paths (avoids LLM for ~60% of requests) ──
+
+    # Check-in messages → villain_challenge
     if re.search(r'\bcheck\s*in\b', lower) and re.search(r'weight|lbs|bf|body\s*fat|mobility|nutrition|adherence', lower):
         return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
-    # Also match standalone check-in phrases
     if re.search(r'\bcheck\s*in\b', lower) and re.search(r'\d', lower):
         return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
-    # "completed mobility" / "did mobility" / "nutrition 80" without "check in"
     if re.search(r'(completed|did|done)\s*(mobility|stretch)', lower) or re.search(r'(mobility\s*(done|complete)|met\s+\d+%\s*(nutrition|diet))', lower):
         return {"action": "execute", "skill": "villain_challenge", "role": "fitness_longevity_optimist", "domain": "personal"}
 
-    # Fast pre-classifier: idea factory commands
+    # Idea factory commands
     if re.match(r'(?:new\s+)?idea[:\s]', lower) or re.match(r'challenge[:\s]', lower):
         return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
     if re.search(r'\b(list|show|my)\s+ideas?\b', lower) or re.search(r'\bidea\s+retro', lower):
         return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
     if re.match(r'(advance|kill)\s+idea', lower):
         return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
+
+    # Calendar
+    if re.search(r'\b(calendar|schedule|agenda|appointment|meeting)\b', lower):
+        action = "execute" if re.search(r'\b(add|schedule|create|move|cancel|reschedule)\b', lower) else "query"
+        return {"action": action, "skill": "calendar", "role": "family_activity_coordinator", "domain": "family"}
+
+    # Weather
+    if re.search(r'\b(weather|temperature|forecast|rain|snow|sunny)\b', lower):
+        return {"action": "query", "skill": "weather", "role": "polymath_in_training", "domain": "personal"}
+
+    # Meals / recipes
+    if re.search(r'\b(meal|recipe|dinner|lunch|breakfast|cook|food|eat)\b', lower):
+        action = "execute" if re.search(r'\b(plan|suggest|make|generate)\b', lower) else "query"
+        return {"action": action, "skill": "meal_planner", "role": "family_chef", "domain": "family"}
+
+    # Workouts / fitness
+    if re.search(r'\b(workout|exercise|training|gym|lift|run|cardio|peloton|tonal|whoop|recovery|strain|hrv)\b', lower):
+        return {"action": "query", "skill": "fitness", "role": "fitness_longevity_optimist", "domain": "personal"}
+
+    # Receipts
+    if re.search(r'\b(receipt|expense|purchase|spent|cost)\b', lower):
+        action = "execute" if re.search(r'\b(scan|upload|add|log)\b', lower) else "query"
+        return {"action": action, "skill": "receipts", "role": "polymath_in_training", "domain": "personal"}
+
+    # Greetings / simple chat
+    if re.match(r'^(hi|hello|hey|good\s+(morning|afternoon|evening)|what\'?s up|howdy|yo)\b', lower):
+        return {"action": "conversation", "skill": "none", "role": "polymath_in_training", "domain": "personal"}
+
+    # Briefing
+    if re.search(r'\b(brief|briefing|morning\s+update|daily\s+summary)\b', lower):
+        return {"action": "query", "skill": "briefing", "role": "cybersecurity_executive", "domain": "professional"}
+
+    # Web search
+    if re.search(r'\b(search|google|look\s+up|find\s+out)\b', lower) and not re.search(r'\bidea', lower):
+        return {"action": "query", "skill": "web_search", "role": "polymath_in_training", "domain": "personal"}
+
+    # Medical
+    if re.search(r'\b(medical|doctor|medication|prescription|health\s*record|blood\s*pressure|lab\s*result)\b', lower):
+        return {"action": "query", "skill": "medical", "role": "fitness_longevity_optimist", "domain": "personal"}
+
+    # ── Fall through to LLM classification for ambiguous requests ──
 
     try:
         system_prompt = _build_classifier_prompt()

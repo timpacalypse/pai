@@ -9,6 +9,8 @@ const svg = document.getElementById('network-svg');
 const lineLayer = document.getElementById('line-layer');
 const pulseLayer = document.getElementById('pulse-layer');
 const nodeLayer = document.getElementById('node-layer');
+const orbLabel = document.getElementById('orb-state-label');
+const wakeBtn = document.getElementById('wake-btn');
 
 const ORCHESTRATOR_HTTP = `${location.protocol}//${location.hostname}:8000`;
 const ORCHESTRATOR_WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:8000`;
@@ -259,10 +261,15 @@ function setState(nextState) {
     shell.dataset.state = nextState;
     if (titleEl) titleEl.textContent = stateContent[nextState].title;
     if (copyEl) copyEl.textContent = stateContent[nextState].copy;
+    if (orbLabel) orbLabel.textContent = nextState === 'awake' ? 'ACTIVE' : 'DORMANT';
 }
 
 function applyVoiceState(rawState) {
     if (!rawState) return;
+    // Update granular orb label
+    const labelMap = { sleeping: 'DORMANT', listening: 'LISTENING', thinking: 'PROCESSING', responding: 'SPEAKING' };
+    if (orbLabel) orbLabel.textContent = labelMap[rawState] || 'ACTIVE';
+
     if (rawState === 'sleeping') {
         transitionToSleeping();
         return;
@@ -450,6 +457,75 @@ formEl.addEventListener('submit', (event) => {
     }
     inputEl.value = '';
 });
+
+// ── Touch wake button ──
+if (wakeBtn) {
+    wakeBtn.addEventListener('click', async () => {
+        if (currentState === 'awake') {
+            fetch(`${ORCHESTRATOR_HTTP}/voice/sleep`, { method: 'POST' }).catch(() => {});
+            transitionToSleeping();
+        } else {
+            transitionToAwake();
+            try {
+                const resp = await fetch(`${ORCHESTRATOR_HTTP}/voice/wake`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.audio) {
+                        const audio = new Audio('data:audio/wav;base64,' + data.audio);
+                        audio.play().catch(() => {});
+                    }
+                    if (data.greeting) {
+                        const responseEl = document.getElementById('dash-response');
+                        if (responseEl) responseEl.textContent = data.greeting;
+                    }
+                }
+            } catch (_) {}
+        }
+    });
+}
+
+// ── Dashboard data (clock, weather, calendar, last exchange) ──
+function updateClock() {
+    const now = new Date();
+    const clock = document.getElementById('dash-clock');
+    const dateEl = document.getElementById('dash-date');
+    if (clock) clock.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    if (dateEl) dateEl.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+updateClock();
+setInterval(updateClock, 10000);
+
+async function fetchDashData() {
+    try {
+        const resp = await fetch(`${ORCHESTRATOR_HTTP}/dashboard/summary`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        const weatherEl = document.getElementById('dash-weather');
+        const tempEl = document.getElementById('dash-temp');
+        const eventEl = document.getElementById('dash-event');
+        const eventTimeEl = document.getElementById('dash-event-time');
+        const transcriptEl = document.getElementById('dash-transcript');
+        const responseEl = document.getElementById('dash-response');
+
+        if (data.weather && weatherEl) {
+            weatherEl.textContent = data.weather.condition || '--';
+            if (tempEl) tempEl.textContent = data.weather.temperature || '--';
+        }
+        if (data.next_event && eventEl) {
+            eventEl.textContent = data.next_event.title || '--';
+            if (eventTimeEl) eventTimeEl.textContent = data.next_event.time || '--';
+        }
+        if (data.last_exchange) {
+            if (transcriptEl) transcriptEl.textContent = data.last_exchange.user || 'Awaiting input...';
+            if (responseEl) responseEl.textContent = data.last_exchange.assistant || '--';
+        }
+    } catch (_) {}
+}
+
+// Fetch dashboard data every 30s
+fetchDashData();
+setInterval(fetchDashData, 30000);
 
 buildNetwork();
 setState('sleeping');

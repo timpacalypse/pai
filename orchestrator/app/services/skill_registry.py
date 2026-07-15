@@ -51,8 +51,8 @@ def build_skill_catalog() -> str:
     """Build a compact catalog of skills for the LLM classifier prompt."""
     lines = []
     for skill in _REGISTRY.values():
-        examples = ", ".join(f'"{e}"' for e in skill.examples[:4])
-        lines.append(f'  - "{skill.id}" — {skill.description} (e.g. {examples})')
+        # Compressed: id + description only (no examples) — reduces classifier prompt tokens
+        lines.append(f'  - "{skill.id}" — {skill.description}')
     return "\n".join(lines)
 
 

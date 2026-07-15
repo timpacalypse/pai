@@ -34,7 +34,27 @@ _INTENT_SYSTEM_PROMPT = (
 
 
 async def classify_intent(task_input: str, http_client=None) -> IntentType:
-    """Classify user intent using LLM."""
+    """Classify user intent — regex fast-path first, LLM fallback for ambiguous."""
+    import re
+    lower = task_input.lower().strip()
+
+    # Fast-path: common patterns that don't need LLM
+    if re.match(r'^(hi|hello|hey|good\s+(morning|afternoon|evening)|what\'?s up)', lower):
+        return IntentType.conversation
+    if lower.rstrip().endswith("?") and len(lower.split()) < 15:
+        return IntentType.question
+    if re.search(r'\b(analyze|compare|evaluate|assess|audit|review|pros\s+and\s+cons)\b', lower):
+        return IntentType.analysis
+    if re.search(r'\b(plan|roadmap|strategy|prioritize|timeline|schedule)\b', lower):
+        return IntentType.planning
+    if re.search(r'\b(research|investigate|survey|explore|find\s+out|look\s+into)\b', lower):
+        return IntentType.research
+    if re.search(r'\b(create|build|implement|deploy|configure|run|execute|add|set\s+up)\b', lower):
+        return IntentType.execution
+    if re.search(r'\b(write|draft|compose|brainstorm)\b', lower):
+        return IntentType.creative
+
+    # Ambiguous — use LLM
     try:
         raw = await generate(
             prompt=task_input,

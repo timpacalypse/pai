@@ -444,9 +444,14 @@ async def chat_stream(req: ChatRequest, request: Request):
     start = time.perf_counter()
     http_client = request.app.state.http_client
 
-    # ── Pre-work (not streamed) ──
+    # ── Pre-work: run classification and RAG retrieval in parallel ──
     from app.services.llm_intent_service import classify_chat_intent
-    classification = await classify_chat_intent(req.message, http_client)
+    from app.memory.semantic import search_semantic
+
+    classify_task = asyncio.create_task(classify_chat_intent(req.message, http_client))
+    rag_task = asyncio.create_task(search_semantic(req.message, limit=3, http_client=http_client))
+
+    classification = await classify_task
 
     if req.role:
         roles = await resolve_roles(req.role, req.secondary_role)
@@ -491,7 +496,6 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     # ── Build context for streaming generation ──
     from app.services.prompt_service import build_chat_prompt
-    from app.memory.semantic import search_semantic
     from app.services.ollama_service import generate_stream, select_model
 
     system_prompt = build_chat_prompt(roles)
@@ -505,7 +509,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     else:
         user_prompt = req.message
 
-    rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
+    # Use the RAG results from the parallel pre-fetch (already awaited or ready)
+    rag_results = await rag_task
     rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
 
     context_parts = []
@@ -1952,6 +1957,52 @@ async def voice_ws(websocket: WebSocket):
         await unregister_ws(websocket)
 
 
+@router.get("/dashboard/summary")
+async def dashboard_summary(request: Request):
+    """Lightweight summary for the AEGIS dashboard panels (weather, calendar, last exchange)."""
+    result = {"weather": None, "next_event": None, "last_exchange": None}
+
+    # Weather
+    try:
+        from app.services.skill_registry import get_skill
+        weather_skill = get_skill("weather")
+        if weather_skill and weather_skill.read_handler:
+            http_client = request.app.state.http_client
+            raw = await weather_skill.read_handler("current weather", http_client)
+            if raw:
+                lines = raw.strip().split("\n")
+                result["weather"] = {
+                    "condition": lines[0] if lines else "--",
+                    "temperature": lines[1] if len(lines) > 1 else "--",
+                }
+    except Exception:
+        pass
+
+    # Next calendar event
+    try:
+        from app.services.calendar_service import get_next_event
+        event = await get_next_event()
+        if event:
+            result["next_event"] = {"title": event.get("summary", "--"), "time": event.get("start_display", "--")}
+    except Exception:
+        pass
+
+    # Last voice exchange
+    try:
+        from app.memory.episodic import get_chat_history
+        turns = await get_chat_history("voice", limit=1)
+        if turns:
+            last = turns[0]
+            result["last_exchange"] = {
+                "user": last.get("user_message", "")[:120],
+                "assistant": last.get("assistant_message", "")[:200],
+            }
+    except Exception:
+        pass
+
+    return result
+
+
 @router.get("/voice/state")
 async def voice_state():
     """Get the current AEGIS voice session state."""
@@ -2046,8 +2097,32 @@ async def voice_sleep():
 
 
 @router.post("/voice/wake")
-async def voice_wake():
-    """Force AEGIS into listening state (for hardware wake-word triggers)."""
-    from app.services.voice_service import set_state, VoiceState
+async def voice_wake(request: Request):
+    """Force AEGIS into listening state and optionally return a wake greeting."""
+    import base64
+    from app.services.voice_service import set_state, VoiceState, synthesize_speech
     await set_state(VoiceState.LISTENING)
-    return {"state": "listening"}
+
+    # Generate a brief contextual greeting
+    greeting = _wake_greeting()
+    audio_b64 = None
+    try:
+        audio = await synthesize_speech(greeting)
+        if audio:
+            audio_b64 = base64.b64encode(audio).decode()
+    except Exception:
+        pass
+
+    return {"state": "listening", "greeting": greeting, "audio": audio_b64}
+
+
+def _wake_greeting() -> str:
+    """Produce a short JARVIS-style wake acknowledgment based on time of day."""
+    from datetime import datetime
+    hour = datetime.now().hour
+    if hour < 12:
+        return "Good morning, sir. Systems online and awaiting your command."
+    elif hour < 17:
+        return "Good afternoon. All systems nominal. How may I assist?"
+    else:
+        return "Good evening, sir. At your service."
