@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AEGIS Interface Prototype</title>
+    <link rel="stylesheet" href="aegis.css?v=20260713c">
+</head>
+<body>
+    <div class="radial-core" aria-hidden="true"></div>
+    <div class="starfield" id="starfield" aria-hidden="true"></div>
+    <div class="grid-overlay" aria-hidden="true"></div>
+
+    <main class="shell state-sleeping" id="shell" data-state="sleeping">
+        <div class="interface-center">
+            <section class="display-stage" aria-label="AEGIS visual core">
+                <svg class="network-layer" id="network-svg" viewBox="0 0 1600 980" preserveAspectRatio="xMidYMid meet">
+                    <g id="line-layer"></g>
+                    <g id="pulse-layer"></g>
+                    <g id="node-layer"></g>
+                </svg>
+
+                <div class="orb-wrap">
+                    <div class="shockwave" id="shockwave"></div>
+                    <div class="outer-shell"></div>
+                    <div class="orb-glow"></div>
+                    <div class="orb-shell shell-a"></div>
+                    <div class="orb-shell shell-b"></div>
+                    <div class="orb-shell shell-c"></div>
+                    <div class="orb-shell shell-d"></div>
+                    <div class="orb-shell shell-e"></div>
+                    <div class="orb-shell shell-f"></div>
+                    <div class="orb-shell shell-g"></div>
+                    <!-- JARVIS HUD rings -->
+                    <div class="hud-ring hud-ring-outer"></div>
+                    <div class="hud-ring hud-ring-mid"></div>
+                    <div class="hud-ring hud-ring-data"></div>
+                    <svg class="hud-overlay" viewBox="0 0 420 420">
+                        <defs>
+                            <filter id="hud-glow">
+                                <feGaussianBlur stdDeviation="1.2" result="b"/>
+                                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+                            </filter>
+                        </defs>
+                        <!-- tick marks at every 6 degrees -->
+                        <g id="hud-ticks" filter="url(#hud-glow)"></g>
+                        <!-- arc segments -->
+                        <path class="hud-arc hud-arc-a" d="M 210 14 A 196 196 0 0 1 376 126" fill="none" stroke="rgba(0,212,255,0.38)" stroke-width="1.2" stroke-linecap="round"/>
+                        <path class="hud-arc hud-arc-b" d="M 44 294 A 196 196 0 0 1 210 406" fill="none" stroke="rgba(0,212,255,0.28)" stroke-width="1.2" stroke-linecap="round"/>
+                        <path class="hud-arc hud-arc-c" d="M 388 258 A 196 196 0 0 1 320 376" fill="none" stroke="rgba(0,212,255,0.22)" stroke-width="0.8" stroke-linecap="round"/>
+                        <!-- data readout notches -->
+                        <line class="hud-notch" x1="366" y1="122" x2="388" y2="104" stroke="rgba(0,212,255,0.48)" stroke-width="1"/>
+                        <line class="hud-notch" x1="42" y1="298" x2="20" y2="316" stroke="rgba(0,212,255,0.36)" stroke-width="1"/>
+                        <!-- crosshair inner circle -->
+                        <circle cx="210" cy="210" r="58" fill="none" stroke="rgba(0,212,255,0.14)" stroke-width="0.8" stroke-dasharray="4 7"/>
+                        <circle cx="210" cy="210" r="82" fill="none" stroke="rgba(0,212,255,0.1)" stroke-width="0.7" stroke-dasharray="3 9"/>
+                        <!-- cardinal cross lines -->
+                        <line x1="210" y1="128" x2="210" y2="148" stroke="rgba(0,212,255,0.32)" stroke-width="1.2"/>
+                        <line x1="210" y1="272" x2="210" y2="292" stroke="rgba(0,212,255,0.32)" stroke-width="1.2"/>
+                        <line x1="128" y1="210" x2="148" y2="210" stroke="rgba(0,212,255,0.32)" stroke-width="1.2"/>
+                        <line x1="272" y1="210" x2="292" y2="210" stroke="rgba(0,212,255,0.32)" stroke-width="1.2"/>
+                    </svg>
+                    <div class="orb-center"></div>
+                    <div class="orb-inner-core"></div>
+                </div>
+            </section>
+        </div>
+
+        <form class="command-line" id="command-form">
+            <input
+                id="wake-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="..."
+                aria-label="AEGIS wake word input"
+            >
+        </form>
+    </main>
+
+    <script src="aegis.js?v=20260713c"></script>
+</body>
+</html>

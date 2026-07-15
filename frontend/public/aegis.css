@@ -1,0 +1,476 @@
+:root {
+    --bg: #0a0a1a;
+    --text: #e9f8ff;
+    --muted: rgba(187, 223, 255, 0.68);
+    --cool-cyan: #00d4ff;
+    --cool-light: #9cecff;
+    --cool-white: #effcff;
+    --warm-teal: #00ffc8;
+    --warm-gold: #ffc107;
+    --warm-orange: #ff6b35;
+    --warm-red: #ff3d3d;
+    --line-dim: rgba(120, 220, 255, 0.26);
+    --line-bright: rgba(220, 250, 255, 0.78);
+    --grid: rgba(89, 121, 180, 0.035);
+    --orb-size: clamp(300px, 34vw, 400px);
+    --command-width: min(420px, calc(100vw - 48px));
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.radial-core,
+.starfield,
+.grid-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+}
+
+.radial-core {
+    background:
+        radial-gradient(circle at center, rgba(20, 72, 120, 0.34) 0%, rgba(10, 18, 40, 0.16) 26%, rgba(10, 10, 26, 0) 54%),
+        radial-gradient(circle at center, rgba(0, 212, 255, 0.06) 0%, rgba(10, 10, 26, 0) 40%);
+}
+
+.starfield span {
+    position: absolute;
+    width: 2px;
+    height: 2px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 10px rgba(150, 220, 255, 0.18);
+}
+
+.grid-overlay {
+    opacity: 1;
+    background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 72px 72px;
+}
+
+.shell {
+    position: relative;
+    z-index: 1;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.interface-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+.brand-lockup {
+    text-align: center;
+    margin-top: 12px;
+}
+
+.eyebrow {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.24em;
+    font-size: 10px;
+}
+
+.brand-name {
+    margin-top: 8px;
+    font-size: clamp(2.4rem, 4.2vw, 4.1rem);
+    line-height: 1;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: var(--cool-light);
+    text-shadow: 0 0 24px rgba(0, 212, 255, 0.26);
+}
+
+.display-stage {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.network-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.orb-wrap {
+    position: absolute;
+    width: var(--orb-size);
+    height: var(--orb-size);
+    display: grid;
+    place-items: center;
+    transform-origin: center;
+    animation: orbBreathe 4s ease-in-out infinite;
+}
+
+.orb-glow,
+.orb-shell,
+.orb-center,
+.orb-inner-core,
+.outer-shell,
+.shockwave {
+    position: absolute;
+    border-radius: 50%;
+}
+
+.orb-glow {
+    width: calc(var(--orb-size) + 120px);
+    height: calc(var(--orb-size) + 120px);
+    background: radial-gradient(circle, rgba(0, 212, 255, 0.2) 0%, rgba(0, 212, 255, 0.08) 30%, rgba(8, 18, 38, 0) 68%);
+    filter: blur(12px);
+}
+
+.orb-shell {
+    border: 1px solid rgba(140, 235, 255, 0.2);
+    box-shadow: inset 0 0 22px rgba(0, 212, 255, 0.08), 0 0 16px rgba(0, 212, 255, 0.1);
+}
+
+.hud-ring,
+.hud-overlay {
+    position: absolute;
+    border-radius: 50%;
+}
+
+.hud-ring {
+    border: 1px solid rgba(0, 212, 255, 0.22);
+    animation: hudSpin 20s linear infinite;
+}
+
+.hud-ring-outer {
+    width: 110%;
+    height: 110%;
+    border-color: rgba(0, 212, 255, 0.12);
+    border-style: dashed;
+    border-width: 1px;
+    animation-duration: 38s;
+    animation-direction: reverse;
+}
+
+.hud-ring-mid {
+    width: 102%;
+    height: 102%;
+    border-color: rgba(120, 228, 255, 0.18);
+    border-style: solid;
+    border-width: 1px;
+    animation-duration: 22s;
+}
+
+.hud-ring-data {
+    width: 96%;
+    height: 96%;
+    border-color: rgba(0, 212, 255, 0.14);
+    border-style: dotted;
+    border-width: 1px;
+    animation-duration: 14s;
+    animation-direction: reverse;
+}
+
+.hud-overlay {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    overflow: visible;
+    pointer-events: none;
+    animation: hudSpin 42s linear infinite reverse;
+}
+
+.hud-arc {
+    animation: arcPulse 4.5s ease-in-out infinite;
+}
+
+.hud-arc-b { animation-delay: -1.4s; }
+.hud-arc-c { animation-delay: -2.8s; }
+
+.state-awake .hud-ring {
+    border-color: rgba(0, 255, 200, 0.22);
+}
+
+.state-awake .hud-ring-outer {
+    border-color: rgba(0, 255, 200, 0.12);
+}
+
+.state-awake .hud-ring-data {
+    border-color: rgba(80, 255, 210, 0.18);
+}
+
+@keyframes hudSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes arcPulse {
+    0%, 100% { opacity: 0.72; }
+    50% { opacity: 1; }
+}
+
+.shell-a {
+    width: 100%;
+    height: 100%;
+    transform: rotate(8deg);
+}
+
+.shell-b {
+    width: 94%;
+    height: 94%;
+    transform: rotate(-18deg) scaleY(0.82);
+}
+
+.shell-c {
+    width: 88%;
+    height: 88%;
+    transform: rotate(34deg) scaleX(0.76);
+}
+
+.shell-d {
+    width: 82%;
+    height: 82%;
+    transform: rotate(-32deg) scaleY(0.62);
+}
+
+.shell-e {
+    width: 76%;
+    height: 76%;
+    transform: rotate(58deg) scaleX(0.58);
+}
+
+.shell-f {
+    width: 68%;
+    height: 68%;
+    transform: rotate(-62deg) scaleY(0.52);
+}
+
+.shell-g {
+    width: 54%;
+    height: 54%;
+    transform: rotate(18deg);
+}
+
+.orb-center {
+    width: 70%;
+    height: 70%;
+    background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.92) 0%, rgba(190, 246, 255, 0.75) 12%, rgba(46, 136, 255, 0.46) 48%, rgba(9, 28, 62, 0.86) 72%, rgba(4, 10, 24, 0.98) 100%);
+    box-shadow:
+        0 0 90px rgba(0, 212, 255, 0.24),
+        0 0 160px rgba(0, 212, 255, 0.12),
+        inset 0 0 36px rgba(255, 255, 255, 0.15);
+}
+
+.orb-inner-core {
+    width: 22%;
+    height: 22%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 1) 0%, rgba(210, 249, 255, 0.92) 36%, rgba(102, 224, 255, 0.32) 70%, rgba(102, 224, 255, 0) 100%);
+    filter: blur(1px);
+}
+
+.outer-shell {
+    width: 120%;
+    height: 120%;
+    border-top: 1px solid rgba(255, 130, 160, 0.08);
+    border-right: 1px solid rgba(255, 130, 160, 0.05);
+    border-left: 1px solid transparent;
+    border-bottom: 1px solid transparent;
+    transform: rotate(-18deg);
+    mask-image: linear-gradient(110deg, transparent 24%, rgba(255,255,255,0.8) 46%, rgba(255,255,255,1) 76%, transparent 100%);
+}
+
+.shockwave {
+    width: 100%;
+    height: 100%;
+    border: 2px solid rgba(210, 249, 255, 0.1);
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+.status-block {
+    text-align: center;
+    max-width: 520px;
+    padding: 0 24px;
+}
+
+.status-title {
+    color: var(--cool-light);
+    font-size: 0.98rem;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+
+.status-copy {
+    color: var(--muted);
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.command-line {
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    width: var(--command-width);
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 200ms ease;
+}
+
+.command-line:focus-within {
+    opacity: 1;
+}
+
+.command-line input {
+    width: 100%;
+    border: 1px solid rgba(0, 212, 255, 0.28);
+    border-radius: 999px;
+    padding: 10px 16px;
+    background: rgba(0, 0, 0, 0.08);
+    color: var(--cool-light);
+    font: inherit;
+    outline: none;
+    text-align: center;
+    box-shadow: inset 0 0 12px rgba(0, 212, 255, 0.06);
+}
+
+.command-line input::placeholder {
+    color: rgba(156, 236, 255, 0.34);
+}
+
+.network-line {
+    fill: none;
+    stroke: var(--line-dim);
+    stroke-width: 1.15;
+    stroke-linecap: round;
+    opacity: 0.88;
+}
+
+.network-line.active {
+    stroke: var(--line-bright);
+    stroke-width: 1.6;
+    filter: drop-shadow(0 0 8px rgba(200, 248, 255, 0.55));
+}
+
+.network-node {
+    transition: fill 180ms ease, opacity 180ms ease, r 180ms ease;
+    opacity: 0.92;
+}
+
+.network-node.flash {
+    fill: #ffffff !important;
+    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.72));
+}
+
+.pulse-dot {
+    fill: rgba(255, 255, 255, 0.96);
+    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.72));
+}
+
+.state-awake .orb-wrap {
+    animation: orbBreatheAwake 2.6s ease-in-out infinite;
+}
+
+.state-awake .orb-glow {
+    background: radial-gradient(circle, rgba(0, 255, 200, 0.28) 0%, rgba(0, 255, 200, 0.11) 28%, rgba(6, 22, 40, 0) 70%);
+    transform: scale(1.08);
+}
+
+.state-awake .orb-shell {
+    border-color: rgba(150, 255, 232, 0.2);
+    box-shadow: inset 0 0 28px rgba(0, 255, 200, 0.1), 0 0 24px rgba(0, 255, 200, 0.12);
+}
+
+.state-awake .status-title,
+.state-awake .brand-name,
+.state-awake .command-line input {
+    color: #9fffea;
+}
+
+.state-awake .network-line {
+    stroke: rgba(132, 252, 225, 0.18);
+}
+
+.state-awake .network-line.active {
+    stroke: rgba(255, 220, 120, 0.72);
+}
+
+.state-awake .outer-shell {
+    border-top-color: rgba(255, 166, 126, 0.1);
+    border-right-color: rgba(255, 166, 126, 0.08);
+}
+
+.transition-awake .shockwave,
+.transition-sleep .shockwave {
+    animation: shock 1.7s ease-out forwards;
+}
+
+.transition-awake .orb-wrap {
+    animation: wakePulse 1.7s ease-out;
+}
+
+.transition-sleep .orb-wrap {
+    animation: sleepSettle 1.5s ease-out;
+}
+
+@keyframes orbBreathe {
+    0%, 100% { transform: scale(0.98); }
+    50% { transform: scale(1.02); }
+}
+
+@keyframes orbBreatheAwake {
+    0%, 100% { transform: scale(0.96); }
+    50% { transform: scale(1.06); }
+}
+
+@keyframes wakePulse {
+    0% { transform: scale(1); }
+    36% { transform: scale(1.15); }
+    100% { transform: scale(1.05); }
+}
+
+@keyframes sleepSettle {
+    0% { transform: scale(1.05); }
+    100% { transform: scale(0.99); }
+}
+
+@keyframes shock {
+    0% { opacity: 0.72; transform: scale(0.72); }
+    100% { opacity: 0; transform: scale(1.7); }
+}
+
+@media (max-width: 900px) {
+    .display-stage {
+        width: 100vw;
+        height: min(72vh, 760px);
+    }
+
+    .status-block {
+        max-width: 420px;
+    }
+}

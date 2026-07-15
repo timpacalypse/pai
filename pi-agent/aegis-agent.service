@@ -1,0 +1,18 @@
+[Unit]
+Description=AEGIS Pi Voice Agent
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/aegis
+ExecStart=/home/pi/aegis/venv/bin/python agent.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

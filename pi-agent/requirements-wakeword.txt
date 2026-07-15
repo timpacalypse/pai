@@ -1,0 +1,4 @@
+# Optional wake-word dependencies
+# This may fail on some Raspberry Pi 3 + Python combinations due to
+# unavailable tflite-runtime wheels. setup.sh handles failure gracefully.
+openwakeword==0.6.0

@@ -1,8 +1,9 @@
+import io
 import logging
 import secrets
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from app.models.schemas import (
@@ -1927,3 +1928,126 @@ async def villain_sync():
     await _sync_objective_progress()
     from app.services.villain_challenge.villain_engine import get_active_challenge
     return await get_active_challenge()
+
+
+# ── AEGIS Voice Interface ─────────────────────────────────────────────────────
+
+@router.websocket("/voice/ws")
+async def voice_ws(websocket: WebSocket):
+    """WebSocket — pushes orb state changes to AEGIS display clients."""
+    from app.services.voice_service import register_ws, unregister_ws, get_state_dict
+    import json
+
+    await websocket.accept()
+    await register_ws(websocket)
+    try:
+        await websocket.send_text(json.dumps(get_state_dict()))
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except Exception:
+        pass
+    finally:
+        await unregister_ws(websocket)
+
+
+@router.get("/voice/state")
+async def voice_state():
+    """Get the current AEGIS voice session state."""
+    from app.services.voice_service import get_state_dict
+    return get_state_dict()
+
+
+@router.post("/voice/transcribe")
+async def voice_transcribe(request: Request):
+    """Accept audio (multipart field 'audio'), return transcript text."""
+    from app.services.voice_service import transcribe_audio, set_state, VoiceState
+    form = await request.form()
+    audio_file = form.get("audio")
+    if not audio_file:
+        raise HTTPException(400, "Missing 'audio' field")
+    audio_bytes = await audio_file.read()
+    await set_state(VoiceState.LISTENING)
+    transcript = await transcribe_audio(audio_bytes)
+    if not transcript:
+        await set_state(VoiceState.SLEEPING)
+        raise HTTPException(422, "Could not transcribe audio")
+    return {"transcript": transcript}
+
+
+@router.post("/voice/respond")
+async def voice_respond(request: Request):
+    """Accept transcript text, route through PAI skills, return response.
+
+    Body: {"text": "...", "telegram": false}
+    """
+    from app.services.voice_service import (
+        generate_voice_response, set_state, VoiceState, _forward_to_telegram,
+    )
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    telegram = bool(body.get("telegram", False))
+    if not text:
+        raise HTTPException(400, "Missing 'text' field")
+    await set_state(VoiceState.THINKING)
+    response_text = await generate_voice_response(
+        text, http_client=request.app.state.http_client
+    )
+    if telegram:
+        await _forward_to_telegram(text, response_text)
+    await set_state(VoiceState.RESPONDING)
+    return {"response": response_text}
+
+
+@router.post("/voice/tts")
+async def voice_tts(request: Request):
+    """Convert text to WAV audio. Body: {"text": "..."}"""
+    from app.services.voice_service import synthesize_speech
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "Missing 'text' field")
+    audio = await synthesize_speech(text)
+    if audio is None:
+        raise HTTPException(503, "TTS backend not available")
+    return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
+
+
+@router.post("/voice/turn")
+async def voice_turn(request: Request):
+    """One complete voice turn: audio/text → STT → skills → TTS.
+
+    Multipart fields: audio (file, optional), text (str, optional), telegram ("1"/"0")
+    Returns: {transcript, response_text, audio_b64}
+    """
+    from app.services.voice_service import process_voice_turn
+    form = await request.form()
+    audio_file = form.get("audio")
+    text_input = form.get("text") or None
+    telegram = form.get("telegram", "0") == "1"
+    audio_bytes = await audio_file.read() if audio_file else None
+    if not audio_bytes and not text_input:
+        raise HTTPException(400, "Provide 'audio' file or 'text' field")
+    return await process_voice_turn(
+        audio_bytes=audio_bytes,
+        text_input=text_input,
+        http_client=request.app.state.http_client,
+        telegram_forward=telegram,
+    )
+
+
+@router.post("/voice/sleep")
+async def voice_sleep():
+    """Force AEGIS back to sleeping state."""
+    from app.services.voice_service import set_state, VoiceState
+    await set_state(VoiceState.SLEEPING)
+    return {"state": "sleeping"}
+
+
+@router.post("/voice/wake")
+async def voice_wake():
+    """Force AEGIS into listening state (for hardware wake-word triggers)."""
+    from app.services.voice_service import set_state, VoiceState
+    await set_state(VoiceState.LISTENING)
+    return {"state": "listening"}

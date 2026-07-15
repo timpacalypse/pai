@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     tonal_email: str = ""
     tonal_password: str = ""
 
+    # AEGIS Voice
+    whisper_model: str = "tiny"           # tiny | base | small | medium
+    whisper_device: str = "cpu"           # cpu | cuda
+    piper_model: str = "en_US-lessac-medium"
+    piper_model_path: str = "/opt/piper/models/en_US-lessac-medium.onnx"
+    piper_speaker: str = ""
+    piper_length_scale: float = 1.0
+    piper_noise_scale: float = 0.667
+    piper_noise_w: float = 0.8
+    piper_sentence_silence: float = 0.2
+
+    # Telegram forwarding (optional — leave blank to disable)
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

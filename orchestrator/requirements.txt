@@ -18,3 +18,14 @@ python-multipart==0.0.20
 google-api-python-client==2.166.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
+
+# ── AEGIS Voice Pipeline ─────────────────────────────────────────────────────
+# Speech-to-text (CPU-compatible whisper, also enables GPU if available)
+faster-whisper==1.0.3
+# TTS fallback (piper is installed as a binary, pyttsx3 is the pure-python fallback)
+pyttsx3==2.92
+# Audio file handling (used by faster-whisper and audio utilities)
+soundfile==0.12.1
+numpy>=1.26.0
+# Telegram bot forwarding
+python-telegram-bot==21.7

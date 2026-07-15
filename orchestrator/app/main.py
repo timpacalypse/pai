@@ -51,6 +51,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Process skill registration failed: {e}")
 
+    # Pre-warm STT model so the first voice turn doesn't hit a cold-load timeout
+    _main_log = logging.getLogger("pai.main")
+    try:
+        from app.services.voice_service import _get_whisper
+        asyncio.create_task(_get_whisper())
+        _main_log.info("whisper_warmup_started")
+    except Exception as e:
+        _main_log.warning(f"whisper_warmup_skipped: {e}")
+
     # Start background schedulers
     scheduler_task = asyncio.create_task(scheduler_loop())
     app.state.scheduler_task = scheduler_task
@@ -93,9 +102,10 @@ app = FastAPI(
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://pai-frontend:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 app.include_router(router)
 

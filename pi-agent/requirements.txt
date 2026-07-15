@@ -1,0 +1,25 @@
+# AEGIS Pi Voice Agent dependencies
+# Run: pip install -r requirements.txt
+
+# Audio capture from microphone
+sounddevice==0.5.1
+soundfile==0.12.1
+numpy>=1.26.0
+
+# Wake-word detection — Vosk is the primary engine (no signup, offline, Pi 3 ARM wheels available).
+# openWakeWord installed optionally by setup.sh as fallback.
+vosk>=0.3.45
+
+# HTTP client for PAI orchestrator calls
+httpx[http2]==0.28.1
+requests==2.32.3
+
+# WebSocket client for AEGIS state sync
+websockets==14.1
+
+# TTS playback (audio output)
+# piper binary handles TTS; pygame plays the WAV output
+pygame==2.6.1
+
+# Config via .env file
+python-dotenv==1.0.1
