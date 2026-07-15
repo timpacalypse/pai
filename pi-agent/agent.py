@@ -54,6 +54,7 @@ WAKE_WORD = os.environ.get("WAKE_WORD", "aegis")
 # openWakeWord fallback (if Vosk model dir not present)
 WAKE_MODEL = os.environ.get("WAKE_MODEL", "hey_jarvis")
 WAKE_THRESHOLD = float(os.environ.get("WAKE_THRESHOLD", "0.5"))
+VOSK_PARTIAL_HITS_REQUIRED = int(os.environ.get("VOSK_PARTIAL_HITS_REQUIRED", "2"))
 
 
 def _parse_audio_device(raw: str | None):
@@ -308,12 +309,17 @@ def speak_fallback(text: str) -> None:
     import subprocess
     try:
         if sys.platform == "win32":
+            env = os.environ.copy()
+            env["AEGIS_SPEAK_TEXT"] = text
             subprocess.run(
                 ["powershell", "-c",
-                 f"Add-Type -AssemblyName System.Speech; "
-                 f"(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{text}')"],
+                 "$s=$env:AEGIS_SPEAK_TEXT; "
+                 "Add-Type -AssemblyName System.Speech; "
+                 "$voice = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                 "$voice.Speak($s)"],
                 timeout=20,
                 check=False,
+                env=env,
             )
         else:
             subprocess.run(
@@ -345,6 +351,7 @@ async def listen_for_wake_word() -> bool:
     if vosk_rec is not None:
         logger.info(f"Listening for wake word '{WAKE_WORD}' via Vosk ...")
         buf_size = 4000  # ~0.25s at 16kHz
+        partial_hits = 0
         with sd.RawInputStream(
             samplerate=SAMPLE_RATE,
             channels=1,
@@ -355,15 +362,21 @@ async def listen_for_wake_word() -> bool:
             while True:
                 data, _ = await loop.run_in_executor(None, stream.read, buf_size)
                 if vosk_rec.AcceptWaveform(bytes(data)):
-                    text = _json.loads(vosk_rec.Result()).get("text", "")
-                    if WAKE_WORD.lower() in text.lower():
+                    text = _json.loads(vosk_rec.Result()).get("text", "").strip().lower()
+                    partial_hits = 0
+                    if text == WAKE_WORD.lower():
                         logger.info(f"Wake word detected via Vosk: '{text}'")
                         return True
                 else:
-                    partial = _json.loads(vosk_rec.PartialResult()).get("partial", "")
-                    if WAKE_WORD.lower() in partial.lower():
+                    partial = _json.loads(vosk_rec.PartialResult()).get("partial", "").strip().lower()
+                    if partial == WAKE_WORD.lower():
+                        partial_hits += 1
+                    else:
+                        partial_hits = 0
+                    if partial_hits >= VOSK_PARTIAL_HITS_REQUIRED:
                         logger.info(f"Wake word detected via Vosk (partial): '{partial}'")
                         vosk_rec.Reset()
+                        partial_hits = 0
                         return True
 
     # ─ openWakeWord (fallback) ───────────────────────────────────────────────
