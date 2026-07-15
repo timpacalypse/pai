@@ -366,6 +366,8 @@ async def listen_for_wake_word() -> bool:
         ) as stream:
             while True:
                 data, _ = await loop.run_in_executor(None, stream.read, buf_size)
+                # Yield to event loop and prevent CPU spinning / audio driver stress
+                await asyncio.sleep(0.02)
                 if vosk_rec.AcceptWaveform(bytes(data)):
                     text = _json.loads(vosk_rec.Result()).get("text", "").strip().lower()
                     partial_hits = 0
@@ -397,6 +399,7 @@ async def listen_for_wake_word() -> bool:
         ) as stream:
             while True:
                 chunk, _ = await loop.run_in_executor(None, stream.read, chunk_size)
+                await asyncio.sleep(0.02)
                 scores = oww.predict(chunk.flatten())
                 score = max(scores.values()) if scores else 0.0
                 if score >= WAKE_THRESHOLD:
@@ -479,7 +482,7 @@ async def run():
         except Exception as e:
             logger.error(f"Voice turn failed: {e}", exc_info=True)
             await notify_sleep()
-            await asyncio.sleep(1)
+            await asyncio.sleep(3)  # Back off before re-entering audio loop
 
 
 if __name__ == "__main__":
