@@ -9,7 +9,7 @@ const svg = document.getElementById('network-svg');
 const lineLayer = document.getElementById('line-layer');
 const pulseLayer = document.getElementById('pulse-layer');
 const nodeLayer = document.getElementById('node-layer');
-const orbLabel = document.getElementById('orb-state-label');
+const orbLabel = null;
 const wakeBtn = document.getElementById('wake-btn');
 
 const ORCHESTRATOR_HTTP = `${location.protocol}//${location.hostname}:8000`;
@@ -261,14 +261,10 @@ function setState(nextState) {
     shell.dataset.state = nextState;
     if (titleEl) titleEl.textContent = stateContent[nextState].title;
     if (copyEl) copyEl.textContent = stateContent[nextState].copy;
-    if (orbLabel) orbLabel.textContent = nextState === 'awake' ? 'ACTIVE' : 'DORMANT';
 }
 
 function applyVoiceState(rawState) {
     if (!rawState) return;
-    // Update granular orb label
-    const labelMap = { sleeping: 'DORMANT', listening: 'LISTENING', thinking: 'PROCESSING', responding: 'SPEAKING' };
-    if (orbLabel) orbLabel.textContent = labelMap[rawState] || 'ACTIVE';
 
     if (rawState === 'sleeping') {
         transitionToSleeping();
