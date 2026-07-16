@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Autonomous background workflows
     autonomous_schedule_hours: float = 12.0  # hours between autonomous runs, 0 = disabled
 
+    # Sonos / Music (runs on Synology NAS)
+    sonos_api_url: str = "http://192.168.0.5:5005"
+
     # Google Calendar
     google_credentials_path: str = "/app/credentials/google_credentials.json"
     google_token_path: str = "/app/credentials/google_token.json"

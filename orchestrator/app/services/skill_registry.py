@@ -1623,6 +1623,30 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
         category="personal",
     ))
 
+    # ── Music / Sonos ──
+    async def _music_read(message, http_client=None):
+        from app.services.music_service import get_music_status
+        return await get_music_status(http_client)
+
+    async def _music_write(message, http_client=None):
+        from app.services.music_service import handle_music_command
+        return await handle_music_command(message, http_client)
+
+    register_skill(Skill(
+        id="music",
+        name="Music & Sonos",
+        description="Play music on Sonos speakers — play/pause/skip, set volume, search Spotify playlists/songs by name, control by room",
+        examples=[
+            "play workout playlist on living room",
+            "pause the music", "skip this song",
+            "play jazz in the bedroom", "volume 40",
+            "what's playing right now",
+        ],
+        read_handler=_music_read,
+        write_handler=_music_write,
+        category="personal",
+    ))
+
     logger.info("all_skills_registered", extra={"count": len(_REGISTRY)})
 
 
