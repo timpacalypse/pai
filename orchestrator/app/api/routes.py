@@ -1959,31 +1959,32 @@ async def voice_ws(websocket: WebSocket):
 
 @router.get("/dashboard/summary")
 async def dashboard_summary(request: Request):
-    """Lightweight summary for the AEGIS dashboard panels (weather, calendar, last exchange)."""
+    """Lightweight summary for the dashboard panels (weather, calendar, last exchange)."""
     result = {"weather": None, "next_event": None, "last_exchange": None}
 
-    # Weather
+    # Weather (Open-Meteo via briefing service)
     try:
-        from app.services.skill_registry import get_skill
-        weather_skill = get_skill("weather")
-        if weather_skill and weather_skill.read_handler:
-            http_client = request.app.state.http_client
-            raw = await weather_skill.read_handler("current weather", http_client)
-            if raw:
-                lines = raw.strip().split("\n")
-                result["weather"] = {
-                    "condition": lines[0] if lines else "--",
-                    "temperature": lines[1] if len(lines) > 1 else "--",
-                }
+        from app.services.briefing_service import _get_weather
+        http_client = request.app.state.http_client
+        weather_data = await _get_weather(http_client)
+        if weather_data and not weather_data.get("error"):
+            result["weather"] = {
+                "condition": weather_data.get("condition", "--"),
+                "temperature": f"{weather_data.get('current_temp', '--')}°F",
+            }
     except Exception:
         pass
 
     # Next calendar event
     try:
-        from app.services.calendar_service import get_next_event
-        event = await get_next_event()
-        if event:
-            result["next_event"] = {"title": event.get("summary", "--"), "time": event.get("start_display", "--")}
+        from app.services.calendar_service import get_events
+        events = await get_events(upcoming_days=3)
+        if events:
+            ev = events[0]
+            time_str = ev.get("event_time", "")
+            date_str = str(ev.get("event_date", ""))
+            display_time = f"{date_str} {time_str}".strip() if time_str else date_str
+            result["next_event"] = {"title": ev.get("title", "--"), "time": display_time}
     except Exception:
         pass
 

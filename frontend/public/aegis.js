@@ -18,7 +18,7 @@ const ORCHESTRATOR_WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${lo
 const stateContent = {
     sleeping: {
         title: 'SLEEPING',
-        copy: 'Dormant but alive. Synaptic pathways drift quietly until AEGIS is called.',
+        copy: 'Dormant but alive. Synaptic pathways drift quietly until called.',
     },
     awake: {
         title: 'AWAKE',
@@ -30,7 +30,7 @@ const width = 1600;
 const height = 980;
 const center = { x: width / 2, y: height / 2 };
 const orbRadius = 180;
-const nodeCount = 90;
+const nodeCount = 4500;
 const nodePaletteSleep = ['#00d4ff', '#39dcff', '#75e7ff', '#b7f3ff', '#ffffff'];
 const nodePaletteAwake = ['#38e3ff', '#65ecff', '#91f2ff', '#d6fbff', '#ffffff'];
 
