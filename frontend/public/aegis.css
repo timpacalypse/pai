@@ -366,30 +366,30 @@ body {
 .network-line {
     fill: none;
     stroke: var(--line-dim);
-    stroke-width: 1.15;
+    stroke-width: 0.4;
     stroke-linecap: round;
-    opacity: 0.88;
+    opacity: 0.4;
 }
 
 .network-line.active {
     stroke: var(--line-bright);
-    stroke-width: 1.6;
-    filter: drop-shadow(0 0 8px rgba(200, 248, 255, 0.55));
+    stroke-width: 0.7;
+    filter: drop-shadow(0 0 3px rgba(200, 248, 255, 0.35));
 }
 
 .network-node {
     transition: fill 180ms ease, opacity 180ms ease, r 180ms ease;
-    opacity: 0.92;
+    opacity: 0.35;
 }
 
 .network-node.flash {
     fill: #ffffff !important;
-    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.72));
+    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.5));
 }
 
 .pulse-dot {
-    fill: rgba(255, 255, 255, 0.96);
-    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.72));
+    fill: rgba(255, 255, 255, 0.8);
+    filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.5));
 }
 
 .state-awake .orb-wrap {

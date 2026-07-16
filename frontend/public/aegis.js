@@ -68,10 +68,10 @@ function createStars() {
 }
 
 function pointOnOrbitalBand(index) {
-    const angle = (Math.PI * 2 * index) / nodeCount + rand(-0.08, 0.08);
-    const radius = rand(260, 720);
-    const x = center.x + Math.cos(angle) * radius * rand(0.9, 1.12);
-    const y = center.y + Math.sin(angle) * radius * rand(0.72, 1.06);
+    const angle = (Math.PI * 2 * index) / nodeCount + rand(-0.3, 0.3);
+    const radius = rand(20, orbRadius * 0.85);
+    const x = center.x + Math.cos(angle) * radius * rand(0.9, 1.1);
+    const y = center.y + Math.sin(angle) * radius * rand(0.9, 1.1);
     return { x, y };
 }
 
@@ -79,8 +79,8 @@ function createNode(index) {
     const base = pointOnOrbitalBand(index);
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     circle.setAttribute('class', 'network-node');
-    const radius = rand(4, 10);
-    circle.setAttribute('r', radius.toFixed(1));
+    const radius = rand(0.5, 1.5);
+    circle.setAttribute('r', radius.toFixed(2));
     nodeLayer.appendChild(circle);
     return {
         id: index,
@@ -91,8 +91,8 @@ function createNode(index) {
         r: radius,
         phaseX: rand(0, Math.PI * 2),
         phaseY: rand(0, Math.PI * 2),
-        driftX: rand(3, 11),
-        driftY: rand(3, 12),
+        driftX: rand(1, 4),
+        driftY: rand(1, 4),
         colorIndex: index % nodePaletteSleep.length,
         el: circle,
         linkIds: [],
@@ -145,8 +145,8 @@ function buildLinks() {
     const anchorAngles = [-0.98, -0.72, -0.34, 0.08, 0.42, 0.88, 1.28, 1.7, 2.08, 2.54, 2.92, 3.28];
     const anchors = anchorAngles.map((angle, idx) => ({
         id: `anchor-${idx}`,
-        x: center.x + Math.cos(angle) * (orbRadius + 28),
-        y: center.y + Math.sin(angle) * (orbRadius + 28),
+        x: center.x + Math.cos(angle) * (orbRadius * 0.45),
+        y: center.y + Math.sin(angle) * (orbRadius * 0.45),
         linkIds: [],
     }));
 
@@ -186,16 +186,16 @@ function updateNodeVisual(node) {
     node.el.setAttribute('cx', node.x.toFixed(2));
     node.el.setAttribute('cy', node.y.toFixed(2));
     node.el.setAttribute('fill', palette[node.colorIndex % palette.length]);
-    node.el.setAttribute('opacity', currentState === 'awake' ? '0.98' : '0.9');
+    node.el.setAttribute('opacity', currentState === 'awake' ? '0.5' : '0.3');
 }
 
 function fireNode(node, strength = 'soft') {
     node.el.classList.add('flash');
-    const targetR = strength === 'burst' ? node.r + 5 : node.r + 2.5;
-    node.el.setAttribute('r', targetR.toFixed(1));
+    const targetR = strength === 'burst' ? node.r + 1.2 : node.r + 0.6;
+    node.el.setAttribute('r', targetR.toFixed(2));
     setTimeout(() => {
         node.el.classList.remove('flash');
-        node.el.setAttribute('r', node.r.toFixed(1));
+        node.el.setAttribute('r', node.r.toFixed(2));
     }, strength === 'burst' ? 320 : 180);
 }
 
@@ -206,7 +206,7 @@ function animatePulse(link, duration = 420) {
 
     const pulse = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     pulse.setAttribute('class', 'pulse-dot');
-    pulse.setAttribute('r', currentState === 'awake' ? '4.5' : '3.5');
+    pulse.setAttribute('r', currentState === 'awake' ? '1.8' : '1.2');
     pulseLayer.appendChild(pulse);
 
     link.el.classList.add('active');
