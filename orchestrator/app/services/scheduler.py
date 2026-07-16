@@ -174,6 +174,9 @@ async def scheduler_loop():
 
     logger.info("scheduler_started", extra={"interval_hours": interval_hours})
 
+    # Delay first run so the server is responsive on startup
+    await asyncio.sleep(60)
+
     while True:
         try:
             await run_scheduled_research(

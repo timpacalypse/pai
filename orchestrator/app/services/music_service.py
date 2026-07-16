@@ -127,25 +127,57 @@ async def handle_music_command(message: str, http_client: httpx.AsyncClient) -> 
                 resp = await http_client.get(f"{SONOS_API}/{room_encoded}/play", timeout=5.0)
                 return f"Resumed playback in {room}."
 
-            # Use musicsearch to find and play from Spotify
+            query_lower = query.lower()
+
+            # 1. Fuzzy match against Sonos playlists
+            try:
+                pl_resp = await http_client.get(f"{SONOS_API}/{room_encoded}/playlists", timeout=5.0)
+                if pl_resp.status_code == 200:
+                    playlists = pl_resp.json()
+                    for pl in playlists:
+                        if query_lower in pl.lower() or pl.lower() in query_lower:
+                            pl_encoded = quote(pl)
+                            resp = await http_client.get(
+                                f"{SONOS_API}/{room_encoded}/playlist/{pl_encoded}",
+                                timeout=10.0,
+                            )
+                            if resp.status_code == 200:
+                                return f"Playing playlist \"{pl}\" on {room}."
+            except Exception:
+                pass
+
+            # 2. Fuzzy match against Sonos favourites
+            try:
+                fav_resp = await http_client.get(f"{SONOS_API}/{room_encoded}/favourites", timeout=5.0)
+                if fav_resp.status_code == 200:
+                    favs = fav_resp.json()
+                    for fav in favs:
+                        if query_lower in fav.lower() or fav.lower() in query_lower:
+                            fav_encoded = quote(fav)
+                            resp = await http_client.get(
+                                f"{SONOS_API}/{room_encoded}/favourite/{fav_encoded}",
+                                timeout=10.0,
+                            )
+                            if resp.status_code == 200:
+                                return f"Playing \"{fav}\" on {room}."
+            except Exception:
+                pass
+
+            # 3. Try exact name as last resort
             query_encoded = quote(query)
             resp = await http_client.get(
-                f"{SONOS_API}/{room_encoded}/musicsearch/spotify/playlist/{query_encoded}",
-                timeout=10.0,
-            )
-
-            if resp.status_code == 200:
-                return f"Playing \"{query}\" on {room}."
-
-            # Fallback: try as a generic search (song/artist)
-            resp = await http_client.get(
-                f"{SONOS_API}/{room_encoded}/musicsearch/spotify/song/{query_encoded}",
+                f"{SONOS_API}/{room_encoded}/playlist/{query_encoded}",
                 timeout=10.0,
             )
             if resp.status_code == 200:
-                return f"Playing \"{query}\" on {room}."
+                try:
+                    data = resp.json()
+                    if data.get("status") == "success":
+                        return f"Playing playlist \"{query}\" on {room}."
+                except Exception:
+                    pass
 
-            return f"Couldn't find \"{query}\" on Spotify. Make sure Spotify is linked in your Sonos app."
+            return f"Couldn't find \"{query}\". Available playlists and favourites can be viewed by asking 'what's available on Sonos'."
 
     except httpx.ConnectError:
         return "Cannot reach Sonos controller. Make sure the Sonos devices are on the network."

@@ -148,7 +148,7 @@ async def classify_chat_intent(
     if re.search(r'\b(weather|temperature|forecast|rain|snow|sunny)\b', lower):
         return {"action": "query", "skill": "weather", "role": "polymath_in_training", "domain": "personal"}
 
-    # Music / Sonos
+    # Music / Sonos (before workouts — "play workout playlist" should route to music)
     if re.search(r'\b(play|pause|resume|skip|next\s+song|previous\s+song|volume|playlist|sonos|music|spotify)\b', lower):
         action = "query" if re.search(r'\b(what.?s playing|status|now playing)\b', lower) else "execute"
         return {"action": action, "skill": "music", "role": "polymath_in_training", "domain": "personal"}

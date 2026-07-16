@@ -1,5 +1,6 @@
 """Web search service using DuckDuckGo for article discovery."""
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -44,15 +45,18 @@ async def search_web(
     """
     results = []
     try:
-        with DDGS() as ddgs:
-            hits = list(ddgs.text(query, max_results=max_results, timelimit=time_filter))
-            for hit in hits:
-                results.append(SearchResult(
-                    title=hit.get("title", ""),
-                    url=hit.get("href", ""),
-                    snippet=hit.get("body", ""),
-                    source=_extract_domain(hit.get("href", "")),
-                ))
+        def _blocking_search():
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=max_results, timelimit=time_filter))
+
+        hits = await asyncio.to_thread(_blocking_search)
+        for hit in hits:
+            results.append(SearchResult(
+                title=hit.get("title", ""),
+                url=hit.get("href", ""),
+                snippet=hit.get("body", ""),
+                source=_extract_domain(hit.get("href", "")),
+            ))
     except Exception as e:
         logger.error("ddg_search_failed", extra={"error": str(e), "query": query})
 
