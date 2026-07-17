@@ -1647,6 +1647,37 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
         category="personal",
     ))
 
+    # ── Weather ──
+    async def _weather_read(message, http_client=None):
+        import httpx as _httpx
+        from app.services.briefing_service import _get_weather
+        client = http_client or _httpx.AsyncClient(timeout=10.0)
+        data = await _get_weather(client)
+        if not data or data.get("error"):
+            return data.get("error", "Weather data unavailable.")
+        today = data.get("today", {})
+        lines = [
+            f"Current: {data.get('condition', '--')}, {data.get('current_temp', '--')}°F (feels {data.get('feels_like', '--')}°F)",
+            f"Humidity: {data.get('humidity', '--')}%  Wind: {data.get('wind_speed', '--')} mph",
+            f"Today: High {today.get('high', '--')}°F / Low {today.get('low', '--')}°F, "
+            f"precip {today.get('precip_chance', '--')}%",
+        ]
+        forecast = data.get("forecast", [])
+        for day in forecast[:2]:
+            lines.append(f"  {day.get('date','')}: {day.get('condition','')}, "
+                         f"{day.get('high','--')}°F / {day.get('low','--')}°F")
+        return "\n".join(lines)
+
+    register_skill(Skill(
+        id="weather",
+        name="Weather",
+        description="Current conditions and 3-day forecast — temperature, humidity, wind, precipitation",
+        examples=["what's the weather", "weather today", "will it rain", "forecast this week", "how hot is it outside"],
+        read_handler=_weather_read,
+        write_handler=None,
+        category="personal",
+    ))
+
     logger.info("all_skills_registered", extra={"count": len(_REGISTRY)})
 
 
