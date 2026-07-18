@@ -194,7 +194,7 @@ async def generate_tool_call(
                 "messages": messages,
                 "tools": tools,
                 "stream": False,
-                "options": {"temperature": 0.3, "num_ctx": 8192, "num_predict": 2048},
+                "options": {"temperature": 0.3, "num_ctx": 8192, "num_predict": 256},
                 "think": False,
                 "keep_alive": "30m",
             },

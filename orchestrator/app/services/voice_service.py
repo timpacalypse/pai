@@ -161,17 +161,20 @@ async def generate_voice_response(
     user_name: str = "Tim",
     http_client=None,
 ) -> str:
-    """Route the transcribed text through the existing PAI chat/skill pipeline."""
-    from app.models.schemas import ChatRequest
-    from app.core.orchestrator import handle_task
-
-    # Reuse the same chat handler used by the browser UI
+    """Route transcribed text through the shared chat pipeline with parallel RAG + classification."""
+    import asyncio
     from app.services.llm_intent_service import classify_chat_intent
     from app.services.skill_registry import get_skill
     from app.services.role_service import resolve_roles
+    from app.memory.semantic import search_semantic
+    from app.services.ollama_service import generate
 
-    start = time.perf_counter()
-    classification = await classify_chat_intent(text, http_client)
+    # Parallel: classify intent + prefetch RAG context
+    classification, rag_results = await asyncio.gather(
+        classify_chat_intent(text, http_client),
+        search_semantic(text, limit=3, http_client=http_client),
+    )
+
     roles = await resolve_roles(classification["role"], None)
     action = classification["action"]
     skill_id = classification["skill"]
@@ -184,9 +187,6 @@ async def generate_voice_response(
                     return await skill.write_handler(text, http_client) or ""
                 elif skill.read_handler:
                     skill_data = await skill.read_handler(text, http_client) or ""
-                    # Summarize skill data through the LLM for a spoken answer
-                    from app.services.ollama_service import generate
-                    from app.core.config import settings
                     prompt = (
                         f"The user asked via voice: \"{text}\"\n\n"
                         f"Relevant data:\n{skill_data}\n\n"
@@ -203,10 +203,15 @@ async def generate_voice_response(
             except Exception as e:
                 logger.warning("voice_skill_failed", extra={"skill": skill_id, "error": str(e)})
 
-    # Fallback: direct conversational response
-    from app.services.ollama_service import generate
+    # Conversational fallback with RAG context
+    rag_context = ""
+    if rag_results:
+        rag_context = "\n\nRelevant context:\n" + "\n".join(
+            f"- {r['content'][:200]}" for r in rag_results if r.get("similarity", 0) > 0.4
+        )
+
     return await generate(
-        prompt=text,
+        prompt=text + rag_context,
         system_prompt=_VOICE_SYSTEM_PROMPT,
         http_client=http_client,
     )
@@ -256,15 +261,11 @@ async def _tts_piper(text: str) -> bytes:
     loop = asyncio.get_event_loop()
 
     def _run():
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            wav_out = f.name
-
         cmd = [
             "piper",
             "--model",
             model_path,
-            "--output_file",
-            wav_out,
+            "--output-raw",
             "--length_scale",
             str(length_scale),
             "--noise_scale",
@@ -281,10 +282,22 @@ async def _tts_piper(text: str) -> bytes:
         if result.returncode != 0:
             raise RuntimeError(f"piper failed: {result.stderr.decode(errors='ignore')}")
 
-        with open(wav_out, "rb") as f:
-            data = f.read()
-        os.unlink(wav_out)
-        return data
+        # Convert raw PCM (16-bit signed, mono, 22050Hz) to WAV in memory
+        import struct
+        pcm = result.stdout
+        sample_rate = 22050
+        num_channels = 1
+        bits_per_sample = 16
+        byte_rate = sample_rate * num_channels * bits_per_sample // 8
+        block_align = num_channels * bits_per_sample // 8
+        wav_header = struct.pack(
+            '<4sI4s4sIHHIIHH4sI',
+            b'RIFF', 36 + len(pcm), b'WAVE',
+            b'fmt ', 16, 1, num_channels, sample_rate,
+            byte_rate, block_align, bits_per_sample,
+            b'data', len(pcm),
+        )
+        return wav_header + pcm
 
     return await loop.run_in_executor(None, _run)
 

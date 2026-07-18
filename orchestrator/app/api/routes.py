@@ -2007,11 +2007,10 @@ async def dashboard_summary(request: Request):
         try:
             from app.memory.episodic import get_chat_history
             turns = await get_chat_history("voice", limit=1)
-            if turns:
-                last = turns[0]
+            if turns and len(turns) >= 2:
                 return {
-                    "user": last.get("user_message", "")[:120],
-                    "assistant": last.get("assistant_message", "")[:200],
+                    "user": (turns[0].get("content") or "")[:120],
+                    "assistant": (turns[1].get("content") or "")[:200],
                 }
         except Exception:
             pass

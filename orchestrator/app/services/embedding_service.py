@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 
 import httpx
@@ -7,13 +9,35 @@ from app.core.config import settings
 logger = logging.getLogger("pai.embedding")
 
 EMBED_MODEL = "nomic-embed-text"
+_EMBED_CACHE_TTL = 300  # 5 minutes
+_redis_client = None
+
+
+async def _redis():
+    """Get or create a shared Redis client singleton."""
+    global _redis_client
+    if _redis_client is None:
+        import aioredis
+        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
 
 
 async def get_embedding(
     text: str,
     http_client: httpx.AsyncClient | None = None,
 ) -> list[float]:
-    """Generate an embedding vector using Ollama's nomic-embed-text model."""
+    """Generate an embedding vector using Ollama's nomic-embed-text model, with Redis cache."""
+    cache_key = f"pai:embed:{hashlib.sha256(text.encode()).hexdigest()[:24]}"
+
+    # Check cache
+    try:
+        redis = await _redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
     client = http_client or httpx.AsyncClient(timeout=60.0)
     own_client = http_client is None
 
@@ -24,10 +48,16 @@ async def get_embedding(
         )
         resp.raise_for_status()
         data = resp.json()
-        # Ollama returns {"embeddings": [[...]]} for /api/embed
         embeddings = data.get("embeddings", [])
         if embeddings:
-            return embeddings[0]
+            embedding = embeddings[0]
+            # Cache the result
+            try:
+                redis = await _redis()
+                await redis.set(cache_key, json.dumps(embedding), ex=_EMBED_CACHE_TTL)
+            except Exception:
+                pass
+            return embedding
         return []
     finally:
         if own_client:

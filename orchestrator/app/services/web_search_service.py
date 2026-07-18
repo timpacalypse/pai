@@ -97,10 +97,14 @@ async def search_and_extract(
     """
     results = await search_web(query, max_results=max_results, time_filter=time_filter)
 
-    if extract_bodies:
-        for result in results[:max_extract]:
-            body = await fetch_article_content(result.url, http_client=http_client)
-            result.body = body
+    if extract_bodies and results:
+        sem = asyncio.Semaphore(3)  # limit concurrent fetches
+
+        async def _fetch(r):
+            async with sem:
+                r.body = await fetch_article_content(r.url, http_client=http_client)
+
+        await asyncio.gather(*[_fetch(r) for r in results[:max_extract]])
 
     return results
 

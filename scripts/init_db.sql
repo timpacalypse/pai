@@ -161,10 +161,10 @@ ON CONFLICT (role) DO UPDATE SET
     constraints = EXCLUDED.constraints,
     updated_at = NOW();
 
--- Index for vector similarity search
-CREATE INDEX IF NOT EXISTS idx_semantic_memory_embedding
-    ON semantic_memory USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+-- Index for vector similarity search (HNSW — maintenance-free, better recall than IVFFlat)
+CREATE INDEX IF NOT EXISTS idx_semantic_memory_embedding_hnsw
+    ON semantic_memory USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 -- Index for episodic memory lookups
 CREATE INDEX IF NOT EXISTS idx_episodic_memory_session
@@ -172,6 +172,14 @@ CREATE INDEX IF NOT EXISTS idx_episodic_memory_session
 
 CREATE INDEX IF NOT EXISTS idx_episodic_memory_role
     ON episodic_memory (role);
+
+-- Composite index for chat history queries (session + type + chronological order)
+CREATE INDEX IF NOT EXISTS idx_episodic_chat_history
+    ON episodic_memory (session_id, request_type, created_at ASC);
+
+-- Partial index for conversation listing
+CREATE INDEX IF NOT EXISTS idx_episodic_chat_type
+    ON episodic_memory (request_type, created_at DESC) WHERE request_type = 'chat';
 
 -- Article ledger: deduplication for scheduled research
 CREATE TABLE IF NOT EXISTS article_ledger (
