@@ -90,7 +90,7 @@ async def get_areas(http_client=None) -> list[dict]:
 _SUMMARY_DOMAINS = {
     "light", "switch", "climate", "cover", "lock", "sensor",
     "binary_sensor", "media_player", "fan", "vacuum", "camera",
-    "alarm_control_panel", "input_boolean",
+    "alarm_control_panel", "input_boolean", "select",
 }
 
 _DOMAIN_LABELS = {
@@ -135,8 +135,9 @@ def _fmt_state(entity: dict) -> str:
     elif domain == "binary_sensor":
         device_class = attrs.get("device_class", "")
         label = {"motion": "motion", "door": "door", "window": "window",
-                 "moisture": "leak", "smoke": "smoke"}.get(device_class, "sensor")
-        return f"{name} ({label}): {state}"
+                 "moisture": "leak", "smoke": "smoke"}.get(device_class, "")
+        suffix = f" ({label}): " if label else ": "
+        return f"{name}{suffix}{state}"
     elif domain == "cover":
         pos = attrs.get("current_position")
         if pos is not None:

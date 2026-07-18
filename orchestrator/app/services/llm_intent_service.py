@@ -169,6 +169,13 @@ async def classify_chat_intent(
         return {"action": "query", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
     if re.search(r'\b(is\s*(it|the)\s*(locked|unlocked|open|closed|on|off)|front\s*door|back\s*door|garage\s*(door|open|closed|status))\b', lower):
         return {"action": "query", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
+    # Appliances, sensors, and any named device status query
+    if re.search(r'\b(dryer|washer|dishwasher|refrigerator|fridge|oven|microwave|vacuum|robot|motion\s*sensor|door\s*sensor|window\s*sensor|smoke\s*detector|leak\s*sensor|alarm\s*panel|ceiling\s*fan)\b', lower):
+        action = "execute" if re.search(r'\b(turn\s*(on|off)|start|stop|run|cancel)\b', lower) else "query"
+        return {"action": action, "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
+    # Generic "status of X" or "is X running/on/done" — catch-all for HA devices
+    if re.search(r'\b(status\s*of\s*the|is\s*(the|my)\s*\w+\s*(running|on|off|done|finished|complete|ready|available)|what\s*is\s*the\s*\w+\s*status)\b', lower) and not re.search(r'\b(agent|server|system|service|container|battle|challenge|villain)\b', lower):
+        return {"action": "query", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
 
     # ── Weather ──
     if re.search(r'\b(weather|forecast|rain|snow|sunny|humidity|wind\s*speed|precipitation)\b', lower):
