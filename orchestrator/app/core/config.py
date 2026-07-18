@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     piper_noise_w: float = 0.8
     piper_sentence_silence: float = 0.15
 
+    # Home Assistant integration (optional — leave blank to disable)
+    ha_url: str = ""        # e.g. http://homeassistant.local:8123
+    ha_token: str = ""      # long-lived access token from HA profile page
+
     # Telegram forwarding (optional — leave blank to disable)
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

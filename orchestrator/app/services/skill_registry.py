@@ -1647,6 +1647,34 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
         category="personal",
     ))
 
+    # ── Home Assistant (Smart Home) ──
+    async def _ha_read(message, http_client=None):
+        from app.services.home_assistant_service import build_ha_context
+        return await build_ha_context(message, http_client)
+
+    async def _ha_write(message, http_client=None):
+        from app.services.home_assistant_service import process_ha_command
+        return await process_ha_command(message, http_client)
+
+    register_skill(Skill(
+        id="smart_home",
+        name="Smart Home (Home Assistant)",
+        description="Query and control Home Assistant devices — lights, thermostats, locks, covers, sensors, switches. Ask about device status by room or type, or issue control commands.",
+        examples=[
+            "what lights are on", "is the front door locked",
+            "what's the temperature in the living room",
+            "show all devices in the bedroom",
+            "turn off the kitchen lights",
+            "set the thermostat to 72",
+            "open the garage door", "lock the front door",
+            "what's on in the house", "home device status",
+            "turn on the living room fan",
+        ],
+        read_handler=_ha_read,
+        write_handler=_ha_write,
+        category="personal",
+    ))
+
     # ── Weather ──
     async def _weather_read(message, http_client=None):
         import httpx as _httpx

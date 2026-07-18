@@ -162,6 +162,14 @@ async def classify_chat_intent(
         action = "execute" if re.search(r'\b(add|create|move|cancel|reschedule)\b', lower) else "query"
         return {"action": action, "skill": "calendar", "role": "family_activity_coordinator", "domain": "family"}
 
+    # ── Smart home / Home Assistant ──
+    if re.search(r'\b(turn\s*(on|off)|switch\s*(on|off)|dim|brighten|set\s*the\s*(thermostat|temperature|heat|ac)|lock|unlock|open\s*the|close\s*the|garage\s*door)\b', lower) and not re.search(r'\b(alarm|music|play|song|playlist|sonos|spotify)\b', lower):
+        return {"action": "execute", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(lights?\s*(on|off|status|in|are)|is\s*the\s*(light|door|lock|thermostat|garage)|what(\s*devices?|\s*is\s*(on|off|locked|open|closed))|home\s*(device|assistant)\s*(status|summary)|devices?\s*(in|status|summary)|smart\s*home|ha\s*status)\b', lower):
+        return {"action": "query", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(is\s*(it|the)\s*(locked|unlocked|open|closed|on|off)|front\s*door|back\s*door|garage\s*(door|open|closed|status))\b', lower):
+        return {"action": "query", "skill": "smart_home", "role": "polymath_in_training", "domain": "personal"}
+
     # ── Weather ──
     if re.search(r'\b(weather|forecast|rain|snow|sunny|humidity|wind\s*speed|precipitation)\b', lower):
         return {"action": "query", "skill": "weather", "role": "polymath_in_training", "domain": "personal"}
