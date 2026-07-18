@@ -237,9 +237,9 @@ def select_model(task_input: str) -> str:
     """
     Select a model based on task complexity.
 
-    Routing rules:
-      - Simple/short queries → qwen3:4b (fast, lightweight)
-      - Standard + complex tasks → qwen3:8b (balanced default)
+        Routing rules:
+            - Simple/short queries → qwen3:4b (fast, lightweight)
+            - Standard + complex tasks → settings.ollama_default_model
     """
     lower = task_input.lower()
     word_count = len(lower.split())

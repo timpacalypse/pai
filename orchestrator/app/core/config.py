@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pai:pai_dev_secret@postgres:5432/pai"
     redis_url: str = "redis://redis:6379/0"
     ollama_url: str = "http://192.168.0.58:11434"
-    ollama_default_model: str = "qwen3:8b"
+    ollama_default_model: str = "qwen2.5:14b-instruct-q4_K_M"
     orchestrator_env: str = "development"
     orchestrator_log_level: str = "info"
 
