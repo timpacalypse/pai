@@ -303,9 +303,15 @@ async def chat(req: ChatRequest, request: Request):
     start = time.perf_counter()
     http_client = request.app.state.http_client
 
-    # ── Step 1: LLM-based classification (single fast call) ──
+    # ── Step 1: Classification + RAG in parallel ──
+    import asyncio
     from app.services.llm_intent_service import classify_chat_intent
-    classification = await classify_chat_intent(req.message, http_client)
+    from app.memory.semantic import search_semantic
+
+    classification, rag_results = await asyncio.gather(
+        classify_chat_intent(req.message, http_client),
+        search_semantic(req.message, limit=3, http_client=http_client),
+    )
 
     if req.role:
         roles = await resolve_roles(req.role, req.secondary_role)
@@ -314,6 +320,9 @@ async def chat(req: ChatRequest, request: Request):
 
     action = classification["action"]     # query | execute | conversation
     skill_id = classification["skill"]    # registered skill id or "none"
+
+    # Pre-filter RAG results
+    rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
 
     # ── Step 2: Skill dispatch ──
     from app.services.skill_registry import get_skill
@@ -326,19 +335,19 @@ async def chat(req: ChatRequest, request: Request):
                     content = await skill.write_handler(req.message, http_client)
                     return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
                 elif action == "query" and skill.read_handler:
-                    # Inject skill data as context for the LLM to interpret
                     skill_data = await skill.read_handler(req.message, http_client)
                     content = await _generate_with_context(
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
+                        preloaded_rag=rag_context,
                     )
                     return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
                 elif skill.read_handler:
-                    # Action ambiguous — default to reading with context
                     skill_data = await skill.read_handler(req.message, http_client)
                     content = await _generate_with_context(
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
+                        preloaded_rag=rag_context,
                     )
                     return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
             except Exception as e:
@@ -346,7 +355,7 @@ async def chat(req: ChatRequest, request: Request):
                 # Fall through to conversation
 
     # ── Step 3: Conversation — build context and generate response ──
-    content = await _generate_with_context(req, roles, http_client)
+    content = await _generate_with_context(req, roles, http_client, preloaded_rag=rag_context)
     return _build_chat_response(req, roles, content, "conversation", start, http_client)
 
 
@@ -355,6 +364,7 @@ async def _generate_with_context(
     roles,
     http_client,
     skill_context: list[str] | None = None,
+    preloaded_rag: list[str] | None = None,
 ) -> str:
     """Generate an LLM response with RAG + optional skill context."""
     from app.services.prompt_service import build_chat_prompt
@@ -373,9 +383,12 @@ async def _generate_with_context(
     else:
         user_prompt = req.message
 
-    # RAG: retrieve from semantic memory
-    rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
-    rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
+    # Use pre-fetched RAG results if available, otherwise fetch now
+    if preloaded_rag is not None:
+        rag_context = preloaded_rag
+    else:
+        rag_results = await search_semantic(req.message, limit=3, http_client=http_client)
+        rag_context = [r["content"] for r in rag_results if r.get("similarity", 0) > 0.6]
 
     # Assemble augmented prompt
     context_parts = []
@@ -1960,48 +1973,55 @@ async def voice_ws(websocket: WebSocket):
 @router.get("/dashboard/summary")
 async def dashboard_summary(request: Request):
     """Lightweight summary for the dashboard panels (weather, calendar, last exchange)."""
-    result = {"weather": None, "next_event": None, "last_exchange": None}
+    import asyncio
+    http_client = request.app.state.http_client
 
-    # Weather (Open-Meteo via briefing service)
-    try:
-        from app.services.briefing_service import _get_weather
-        http_client = request.app.state.http_client
-        weather_data = await _get_weather(http_client)
-        if weather_data and not weather_data.get("error"):
-            result["weather"] = {
-                "condition": weather_data.get("condition", "--"),
-                "temperature": f"{weather_data.get('current_temp', '--')}°F",
-            }
-    except Exception:
-        pass
+    async def _fetch_weather():
+        try:
+            from app.services.briefing_service import _get_weather
+            weather_data = await _get_weather(http_client)
+            if weather_data and not weather_data.get("error"):
+                return {
+                    "condition": weather_data.get("condition", "--"),
+                    "temperature": f"{weather_data.get('current_temp', '--')}°F",
+                }
+        except Exception:
+            pass
+        return None
 
-    # Next calendar event
-    try:
-        from app.services.calendar_service import get_events
-        events = await get_events(upcoming_days=3)
-        if events:
-            ev = events[0]
-            time_str = ev.get("event_time", "")
-            date_str = str(ev.get("event_date", ""))
-            display_time = f"{date_str} {time_str}".strip() if time_str else date_str
-            result["next_event"] = {"title": ev.get("title", "--"), "time": display_time}
-    except Exception:
-        pass
+    async def _fetch_event():
+        try:
+            from app.services.calendar_service import get_events
+            events = await get_events(upcoming_days=3)
+            if events:
+                ev = events[0]
+                time_str = ev.get("event_time", "")
+                date_str = str(ev.get("event_date", ""))
+                display_time = f"{date_str} {time_str}".strip() if time_str else date_str
+                return {"title": ev.get("title", "--"), "time": display_time}
+        except Exception:
+            pass
+        return None
 
-    # Last voice exchange
-    try:
-        from app.memory.episodic import get_chat_history
-        turns = await get_chat_history("voice", limit=1)
-        if turns:
-            last = turns[0]
-            result["last_exchange"] = {
-                "user": last.get("user_message", "")[:120],
-                "assistant": last.get("assistant_message", "")[:200],
-            }
-    except Exception:
-        pass
+    async def _fetch_exchange():
+        try:
+            from app.memory.episodic import get_chat_history
+            turns = await get_chat_history("voice", limit=1)
+            if turns:
+                last = turns[0]
+                return {
+                    "user": last.get("user_message", "")[:120],
+                    "assistant": last.get("assistant_message", "")[:200],
+                }
+        except Exception:
+            pass
+        return None
 
-    return result
+    weather, next_event, last_exchange = await asyncio.gather(
+        _fetch_weather(), _fetch_event(), _fetch_exchange()
+    )
+
+    return {"weather": weather, "next_event": next_event, "last_exchange": last_exchange}
 
 
 @router.get("/voice/state")
@@ -2118,9 +2138,16 @@ async def voice_wake(request: Request):
 
 
 def _wake_greeting() -> str:
-    """Produce a short JARVIS-style wake acknowledgment based on time of day."""
+    """Produce a short JARVIS-style wake acknowledgment based on local time of day."""
     from datetime import datetime
-    hour = datetime.now().hour
+    import zoneinfo, os
+    # Use TZ env var if set, otherwise fall back to UTC then try /etc/localtime
+    tz_name = os.environ.get("TZ", "")
+    try:
+        tz = zoneinfo.ZoneInfo(tz_name) if tz_name else zoneinfo.ZoneInfo("America/New_York")
+    except Exception:
+        tz = zoneinfo.ZoneInfo("America/New_York")
+    hour = datetime.now(tz).hour
     if hour < 12:
         return "Good morning, sir. Systems online and awaiting your command."
     elif hour < 17:

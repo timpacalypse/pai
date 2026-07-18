@@ -190,6 +190,8 @@ async def generate_voice_response(
                     prompt = (
                         f"The user asked via voice: \"{text}\"\n\n"
                         f"Relevant data:\n{skill_data}\n\n"
+                        "Answer the user's question using ONLY the numbers, names, and values in the Relevant data above. "
+                        "Do NOT invent or guess any values. Quote specific temperatures, names, and states directly. "
                         "Give a concise spoken response in 1-3 sentences. "
                         "No markdown, no bullet points, no headers."
                     )
