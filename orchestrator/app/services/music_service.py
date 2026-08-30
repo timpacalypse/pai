@@ -23,6 +23,8 @@ async def _parse_music_command(message: str, http_client: httpx.AsyncClient) -> 
             f"Fields:\n"
             f'  "action": one of "play", "pause", "resume", "stop", "skip", "previous", "volume", "status"\n'
             f'  "query": what to play (playlist name, song, artist) — empty string if not applicable\n'
+            f'  "media_type": one of "song", "album", "playlist", "station" if clear, else empty string\n'
+            f'  "service": one of "spotify", "apple", "deezer", "elite", "library" if clear, else empty string\n'
             f'  "room": which speaker/room — empty string if not specified\n'
             f'  "volume": integer 0-100 if volume command, else null\n'
             f"\nMessage: {message}"
@@ -36,10 +38,111 @@ async def _parse_music_command(message: str, http_client: httpx.AsyncClient) -> 
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0:
-            return json.loads(text[start:end])
+            parsed = json.loads(text[start:end])
+            action = str(parsed.get("action", "")).strip().lower()
+            if action not in {"play", "pause", "resume", "stop", "skip", "previous", "volume", "status"}:
+                action = ""
+
+            # Heuristic fallback when action is missing/invalid.
+            if not action:
+                lower = message.lower()
+                if any(k in lower for k in ["what's playing", "what is playing", "now playing", "status"]):
+                    action = "status"
+                elif "pause" in lower:
+                    action = "pause"
+                elif any(k in lower for k in ["resume", "continue"]):
+                    action = "resume"
+                elif any(k in lower for k in ["skip", "next"]):
+                    action = "skip"
+                elif any(k in lower for k in ["previous", "back"]):
+                    action = "previous"
+                elif "stop" in lower:
+                    action = "stop"
+                elif "volume" in lower:
+                    action = "volume"
+                else:
+                    action = "play"
+
+            parsed["action"] = action
+            if str(parsed.get("media_type", "")).strip().lower() not in {"song", "album", "playlist", "station"}:
+                parsed["media_type"] = ""
+            if str(parsed.get("service", "")).strip().lower() not in {"spotify", "apple", "deezer", "elite", "library"}:
+                parsed["service"] = ""
+            return parsed
     except Exception:
         pass
-    return {"action": "play", "query": message, "room": "", "volume": None}
+    return {"action": "play", "query": message, "media_type": "", "service": "", "room": "", "volume": None}
+
+
+def _infer_media_type(message: str, query: str, parsed_type: str = "") -> str:
+    """Infer song/album/playlist/station for musicsearch endpoint."""
+    if parsed_type in {"song", "album", "playlist", "station"}:
+        return parsed_type
+
+    lower = f"{message} {query}".lower()
+    if "playlist" in lower:
+        return "playlist"
+    if "album" in lower:
+        return "album"
+    if "station" in lower or "radio" in lower:
+        return "station"
+    if "song" in lower or "track" in lower:
+        return "song"
+    # Sonos musicsearch/song with artist name plays top tracks for that artist.
+    return "song"
+
+
+def _infer_service(message: str, query: str, parsed_service: str = "") -> str:
+    """Infer provider for musicsearch endpoint."""
+    if parsed_service in {"spotify", "apple", "deezer", "elite", "library"}:
+        return parsed_service
+
+    lower = f"{message} {query}".lower()
+    if "apple music" in lower:
+        return "apple"
+    if "deezer elite" in lower:
+        return "elite"
+    if "deezer" in lower:
+        return "deezer"
+    if "library" in lower or "local" in lower:
+        return "library"
+    return "spotify"
+
+
+async def _try_musicsearch(
+    room_encoded: str,
+    query: str,
+    media_type: str,
+    preferred_service: str,
+    http_client: httpx.AsyncClient,
+) -> tuple[bool, str]:
+    """Try Sonos musicsearch endpoint across likely services."""
+    services = [preferred_service] + [s for s in ["spotify", "apple", "deezer", "elite", "library"] if s != preferred_service]
+    query_encoded = quote(query)
+
+    for service in services:
+        url = f"{SONOS_API}/{room_encoded}/musicsearch/{service}/{media_type}/{query_encoded}"
+        try:
+            resp = await http_client.get(url, timeout=12.0)
+            if resp.status_code != 200:
+                continue
+
+            ok = True
+            try:
+                body = resp.json()
+                # Some endpoints return {status: "success"}; if status exists and isn't success, treat as failure.
+                if isinstance(body, dict) and body.get("status") and str(body.get("status")).lower() != "success":
+                    ok = False
+            except Exception:
+                # Non-JSON 200 payloads are still acceptable for this API.
+                pass
+
+            if ok:
+                return True, service
+        except Exception:
+            continue
+
+    return False, ""
 
 
 async def _get_rooms(http_client: httpx.AsyncClient) -> list[str]:
@@ -77,6 +180,8 @@ async def handle_music_command(message: str, http_client: httpx.AsyncClient) -> 
     cmd = await _parse_music_command(message, http_client)
     action = cmd.get("action", "play")
     query = cmd.get("query", "")
+    media_type = _infer_media_type(message, query, str(cmd.get("media_type", "")).strip().lower())
+    preferred_service = _infer_service(message, query, str(cmd.get("service", "")).strip().lower())
     room_req = cmd.get("room", "")
     volume = cmd.get("volume")
 
@@ -129,6 +234,19 @@ async def handle_music_command(message: str, http_client: httpx.AsyncClient) -> 
 
             query_lower = query.lower()
 
+            # If user explicitly asks for artist/album/song/station, prefer musicsearch first.
+            explicit_search = any(k in message.lower() for k in ["artist", "album", "song", "track", "station", "radio"])
+            if explicit_search or media_type != "playlist":
+                found, service = await _try_musicsearch(
+                    room_encoded=room_encoded,
+                    query=query,
+                    media_type=media_type,
+                    preferred_service=preferred_service,
+                    http_client=http_client,
+                )
+                if found:
+                    return f"Playing {media_type} match for \"{query}\" on {room} via {service}."
+
             # 1. Fuzzy match against Sonos playlists
             try:
                 pl_resp = await http_client.get(f"{SONOS_API}/{room_encoded}/playlists", timeout=5.0)
@@ -163,7 +281,18 @@ async def handle_music_command(message: str, http_client: httpx.AsyncClient) -> 
             except Exception:
                 pass
 
-            # 3. Try exact name as last resort
+            # 3. General music search fallback (song/album/playlist/station)
+            found, service = await _try_musicsearch(
+                room_encoded=room_encoded,
+                query=query,
+                media_type=media_type,
+                preferred_service=preferred_service,
+                http_client=http_client,
+            )
+            if found:
+                return f"Playing {media_type} match for \"{query}\" on {room} via {service}."
+
+            # 4. Try exact playlist name as last resort
             query_encoded = quote(query)
             resp = await http_client.get(
                 f"{SONOS_API}/{room_encoded}/playlist/{query_encoded}",
@@ -177,7 +306,10 @@ async def handle_music_command(message: str, http_client: httpx.AsyncClient) -> 
                 except Exception:
                     pass
 
-            return f"Couldn't find \"{query}\". Available playlists and favourites can be viewed by asking 'what's available on Sonos'."
+            return (
+                f"Couldn't find \"{query}\" as a playable playlist, favourite, song, album, or station. "
+                "Try specifying the service, like 'play album Thriller by Michael Jackson on Spotify'."
+            )
 
     except httpx.ConnectError:
         return "Cannot reach Sonos controller. Make sure the Sonos devices are on the network."

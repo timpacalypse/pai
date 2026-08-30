@@ -7,8 +7,66 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.core.database import async_session
+from app.memory.semantic import store_semantic
 
 logger = logging.getLogger("pai.services.recipes")
+
+
+def _recipe_semantic_source(title: str) -> str:
+    return f"recipe:{title.strip().lower()}"
+
+
+def _build_recipe_semantic_text(recipe: dict) -> str:
+    ingredients = recipe.get("ingredients") or []
+    instructions = recipe.get("instructions") or []
+    tags = recipe.get("tags") or []
+    rating = recipe.get("family_rating")
+
+    lines = [f"Recipe: {recipe.get('title', '')}"]
+    if recipe.get("cuisine"):
+        lines.append(f"Cuisine: {recipe['cuisine']}")
+    if recipe.get("prep_time_min"):
+        lines.append(f"Prep: {recipe['prep_time_min']} min")
+    if recipe.get("cook_time_min"):
+        lines.append(f"Cook: {recipe['cook_time_min']} min")
+    if recipe.get("servings"):
+        lines.append(f"Servings: {recipe['servings']}")
+    if rating is not None:
+        lines.append(f"Family rating: {rating}/5")
+    if tags:
+        lines.append("Tags: " + ", ".join(str(t) for t in tags))
+    if ingredients:
+        lines.append("Ingredients: " + "; ".join(str(i) for i in ingredients))
+    if instructions:
+        lines.append("Instructions: " + " | ".join(str(s) for s in instructions))
+    if recipe.get("notes"):
+        lines.append(f"Notes: {recipe['notes']}")
+    return "\n".join(lines)
+
+
+async def _upsert_recipe_semantic(recipe: dict, http_client=None) -> None:
+    source = _recipe_semantic_source(recipe.get("title", ""))
+    content = _build_recipe_semantic_text(recipe)
+
+    async with async_session() as session:
+        await session.execute(
+            text("DELETE FROM semantic_memory WHERE source = :source"),
+            {"source": source},
+        )
+        await session.commit()
+
+    await store_semantic(
+        content=content,
+        source=source,
+        metadata={
+            "type": "recipe",
+            "recipe_id": recipe.get("id"),
+            "title": recipe.get("title", ""),
+            "cuisine": recipe.get("cuisine", ""),
+            "tags": recipe.get("tags", []),
+        },
+        http_client=http_client,
+    )
 
 
 async def save_recipe(
@@ -23,6 +81,7 @@ async def save_recipe(
     servings: int = 0,
     tags: list[str] | None = None,
     notes: str = "",
+    http_client=None,
 ) -> dict:
     """Save a new recipe or update existing by title."""
     async with async_session() as session:
@@ -65,7 +124,14 @@ async def save_recipe(
         row = result.mappings().fetchone()
         await session.commit()
         logger.info("recipe_saved", extra={"title": title})
-        return dict(row)
+        recipe = dict(row)
+
+    try:
+        await _upsert_recipe_semantic(recipe, http_client=http_client)
+    except Exception as e:
+        logger.warning("recipe_semantic_index_failed", extra={"title": title, "error": str(e)})
+
+    return recipe
 
 
 async def get_recipes(
@@ -137,7 +203,16 @@ async def rate_recipe(recipe_id: int, rating: int) -> dict:
         await session.commit()
         if not row:
             return {"error": "Recipe not found"}
-        return dict(row)
+        rated = dict(row)
+
+    try:
+        recipe = await get_recipe(recipe_id)
+        if recipe:
+            await _upsert_recipe_semantic(recipe)
+    except Exception as e:
+        logger.warning("recipe_semantic_reindex_failed", extra={"recipe_id": recipe_id, "error": str(e)})
+
+    return rated
 
 
 async def delete_recipe(recipe_id: int) -> bool:
@@ -311,7 +386,7 @@ def parse_recipe_text(raw_text: str) -> dict:
     }
 
 
-async def ingest_recipe_text(raw_text: str) -> dict:
+async def ingest_recipe_text(raw_text: str, http_client=None) -> dict:
     """Parse raw recipe text and save it. No LLM needed."""
     parsed = parse_recipe_text(raw_text)
     if parsed.get("error"):
@@ -333,5 +408,6 @@ async def ingest_recipe_text(raw_text: str) -> dict:
         servings=parsed["servings"],
         tags=parsed["tags"],
         notes=parsed["notes"],
+        http_client=http_client,
     )
     return {"recipe": recipe, "parsed_fields": {k: len(v) if isinstance(v, list) else bool(v) for k, v in parsed.items()}}

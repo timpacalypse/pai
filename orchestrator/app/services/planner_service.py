@@ -84,6 +84,24 @@ async def ensure_planner_tables() -> None:
             ON planner_daily_priorities (plan_date DESC)
         """))
 
+        await session.execute(text("""
+            CREATE TABLE IF NOT EXISTS planner_daily_goals (
+                id SERIAL PRIMARY KEY,
+                plan_date DATE NOT NULL,
+                slot INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                notes TEXT DEFAULT '',
+                completed BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(plan_date, slot)
+            )
+        """))
+        await session.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_planner_daily_goals_plan_date
+            ON planner_daily_goals (plan_date DESC)
+        """))
+
         await session.commit()
 
 
@@ -294,6 +312,87 @@ async def get_daily_priorities(for_date: date) -> list[dict]:
         r = await session.execute(text("""
             SELECT slot, title, completed
             FROM planner_daily_priorities
+            WHERE plan_date = :plan_date
+            ORDER BY slot ASC
+        """), {"plan_date": for_date})
+        return [dict(row) for row in r.mappings().fetchall()]
+
+
+async def set_daily_goal_for_date(
+    title: str,
+    for_date: date,
+    slot: int | None = None,
+    notes: str = "",
+) -> dict:
+    """Set one daily goal for a specific date."""
+    await ensure_planner_tables()
+    if slot is None:
+        slot = await _next_open_slot("planner_daily_goals", "plan_date", for_date, 3)
+    if slot is None:
+        return {"error": "All 3 daily goal slots are full. Use slot 1-3 to overwrite."}
+
+    async with async_session() as session:
+        r = await session.execute(text("""
+            INSERT INTO planner_daily_goals (plan_date, slot, title, notes, completed)
+            VALUES (:plan_date, :slot, :title, :notes, FALSE)
+            ON CONFLICT (plan_date, slot)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                notes = EXCLUDED.notes,
+                completed = FALSE,
+                updated_at = NOW()
+            RETURNING id, plan_date, slot, title, completed
+        """), {
+            "plan_date": for_date,
+            "slot": slot,
+            "title": title.strip(),
+            "notes": notes.strip(),
+        })
+        await session.commit()
+        return dict(r.mappings().fetchone())
+
+
+async def replace_daily_goals_for_date(items: list[str], for_date: date) -> dict:
+    """Replace all daily goals for a date with up to 3 provided items."""
+    await ensure_planner_tables()
+    clean = [i.strip() for i in items if i and i.strip()]
+    if not clean:
+        return {"saved": 0, "truncated": 0, "items": []}
+
+    kept = clean[:3]
+    truncated = max(0, len(clean) - len(kept))
+
+    async with async_session() as session:
+        await session.execute(text("""
+            DELETE FROM planner_daily_goals
+            WHERE plan_date = :plan_date
+        """), {"plan_date": for_date})
+
+        saved = []
+        for i, text_item in enumerate(kept, start=1):
+            r = await session.execute(text("""
+                INSERT INTO planner_daily_goals (plan_date, slot, title, notes, completed)
+                VALUES (:plan_date, :slot, :title, '', FALSE)
+                RETURNING id, plan_date, slot, title, completed
+            """), {
+                "plan_date": for_date,
+                "slot": i,
+                "title": text_item,
+            })
+            saved.append(dict(r.mappings().fetchone()))
+
+        await session.commit()
+
+    return {"saved": len(saved), "truncated": truncated, "items": saved}
+
+
+async def get_daily_goals(for_date: date) -> list[dict]:
+    """Get daily goals for a specific date."""
+    await ensure_planner_tables()
+    async with async_session() as session:
+        r = await session.execute(text("""
+            SELECT slot, title, completed
+            FROM planner_daily_goals
             WHERE plan_date = :plan_date
             ORDER BY slot ASC
         """), {"plan_date": for_date})
@@ -706,8 +805,9 @@ def parse_planner_command(message: str) -> dict:
         day_for_query = "today"
 
     # Batch daily goals entry, e.g. "planner goals for tomorrow: a, b, c"
+    # Keep this plural-only so singular "goal for today ..." routes to goal-specific handlers.
     set_daily_batch = re.match(
-        r"(?:planner\s+)?goals?\s+for\s+(today|tomorrow)(?:'s|s)?\s*[:\-]\s*(.+)",
+        r"(?:planner\s+)?goals\s+for\s+(today|tomorrow)(?:'s|s)?\s*[:\-]\s*(.+)",
         lower,
         re.DOTALL,
     )
@@ -717,6 +817,53 @@ def parse_planner_command(message: str) -> dict:
             "day": set_daily_batch.group(1),
             "text": set_daily_batch.group(2).strip(),
         }
+
+    # Slotted natural daily forms:
+    # - "goal 1 for today set up desk for aegis"
+    # - "task 2 for tomorrow: finish chapter 4"
+    natural_daily_slotted = re.match(
+        r"(?:set\s+)?(?:a\s+)?(?:task|goal|todo|to-?do|priority)\s+([1-3])\s+"
+        r"(?:for\s+)?(today|tomorrow)(?:'s|s)?(?:\s*(?:is|are|to))?\s*[:\-]?\s*(.+)",
+        lower,
+        re.DOTALL,
+    )
+    if natural_daily_slotted:
+        kind = "goal" if re.match(r"(?:set\s+)?(?:a\s+)?goal", lower) else "task"
+        return {
+            "action": "set_daily_goal_for_day" if kind == "goal" else "set_daily_task_for_day",
+            "day": natural_daily_slotted.group(2),
+            "slot": int(natural_daily_slotted.group(1)),
+            "text": natural_daily_slotted.group(3).strip(),
+        }
+
+    # Natural daily task/goal forms:
+    # - "task for today: study for aigp exam"
+    # - "goal for today set up desk for pai"
+    # - "today task: ...", "tomorrow goals: a, b, c"
+    natural_daily = re.match(
+        r"(?:set\s+)?(?:a\s+)?(?:tasks?|todos?|to-?do|goals?|priorit(?:y|ies))\s+"
+        r"(?:for\s+)?(today|tomorrow)(?:'s|s)?(?:\s*(?:is|are|to))?\s*[:\-]?\s*(.+)",
+        lower,
+        re.DOTALL,
+    )
+    if not natural_daily:
+        natural_daily = re.match(
+            r"(today|tomorrow)(?:'s|s)?\s+(?:tasks?|todos?|to-?do|goals?|priorit(?:y|ies))"
+            r"(?:\s*(?:is|are|to))?\s*[:\-]?\s*(.+)",
+            lower,
+            re.DOTALL,
+        )
+    if natural_daily:
+        day = natural_daily.group(1)
+        text = natural_daily.group(2).strip()
+        items = parse_goal_items(text)
+        if re.search(r"\bgoals?\b", lower):
+            if len(items) > 1:
+                return {"action": "set_daily_goal_batch", "day": day, "text": text}
+            return {"action": "set_daily_goal_for_day", "day": day, "slot": None, "text": text}
+        if len(items) > 1 or re.search(r"\b(tasks|priorities|todos|to-?dos)\b", lower):
+            return {"action": "set_daily_task_batch", "day": day, "text": text}
+        return {"action": "set_daily_task_for_day", "day": day, "slot": None, "text": text}
 
     # Daily goal batch: "daily goal: a, b, c" or "dg: a, b, c"
     d_goal = re.match(r"(?:daily\s+goal|dg)(?:\s+\d)?[:\s]+(.+)", lower, re.DOTALL)
@@ -750,23 +897,39 @@ def parse_planner_command(message: str) -> dict:
     if show_day_goals:
         return {"action": "show_day_goals", "day": show_day_goals.group(2)}
 
+    show_day_tasks = re.search(r"\b(show|what(?:\s+are|'s)?|list)\b.*\b(tasks?|priorities|todos?|to-?dos)\b.*\b(today|tomorrow)(?:'s|s)?\b", lower)
+    if show_day_tasks:
+        return {"action": "show_day_tasks", "day": show_day_tasks.group(2)}
+
     if day_for_query and re.search(r"\bgoals?\b", lower):
         return {"action": "show_day_goals", "day": day_for_query}
+
+    if day_for_query and re.search(r"\b(tasks?|priorities|todos?|to-?dos)\b", lower):
+        return {"action": "show_day_tasks", "day": day_for_query}
 
     if re.search(r"\b(show\s+planner|my\s+plan|today\s+plan|planner\s+status|planner)\b", lower):
         return {"action": "show"}
 
-    done_daily = re.search(r"\b(done|complete)\s+(?:priority\s*)?(\d)\b", lower)
+    done_daily = re.search(
+        r"\b(?:done|complete|mark\s+(?:done|complete)|check\s*off)\s+(?:daily\s*)?(?:priority\s*)?p?(\d)\b",
+        lower,
+    )
     if done_daily:
-        return {"action": "complete_daily", "slot": int(done_daily.group(2))}
+        return {"action": "complete_daily", "slot": int(done_daily.group(1))}
 
-    done_weekly = re.search(r"\b(done|complete)\s+weekly\s*(\d)\b", lower)
+    done_weekly = re.search(
+        r"\b(?:done|complete|mark\s+(?:done|complete)|check\s*off)\s+weekly\s*p?(\d)\b",
+        lower,
+    )
     if done_weekly:
-        return {"action": "complete_weekly", "slot": int(done_weekly.group(2))}
+        return {"action": "complete_weekly", "slot": int(done_weekly.group(1))}
 
-    done_monthly = re.search(r"\b(done|complete)\s+monthly\s*(\d)\b", lower)
+    done_monthly = re.search(
+        r"\b(?:done|complete|mark\s+(?:done|complete)|check\s*off)\s+monthly\s*p?(\d)\b",
+        lower,
+    )
     if done_monthly:
-        return {"action": "complete_monthly", "slot": int(done_monthly.group(2))}
+        return {"action": "complete_monthly", "slot": int(done_monthly.group(1))}
 
     # Only match complete_by_text when no colon is present (to avoid misidentifying "goal: a, complete b" as completion)
     done_by_text = re.match(r"(?:done|finished|check\s*off|checked\s*off|mark\s+done)\s+(.+)", lower)
@@ -799,7 +962,7 @@ def parse_planner_command(message: str) -> dict:
     d_today = re.match(r"(?:today\s+goals?)(?:\s+(\d))?[:\s]+(.+)", lower, re.DOTALL)
     if d_today:
         slot = int(d_today.group(1)) if d_today.group(1) else None
-        return {"action": "set_daily_for_day", "day": "today", "slot": slot, "text": d_today.group(2).strip()}
+        return {"action": "set_daily_goal_for_day", "day": "today", "slot": slot, "text": d_today.group(2).strip()}
 
     return {"action": "show"}
 

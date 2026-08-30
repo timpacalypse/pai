@@ -8,7 +8,8 @@ from app.core.config import settings
 
 logger = logging.getLogger("pai.embedding")
 
-EMBED_MODEL = "nomic-embed-text"
+EMBED_MODEL = "qwen3-embedding:0.6b"
+EMBED_MODEL_FALLBACK = "nomic-embed-text"
 _EMBED_CACHE_TTL = 300  # 5 minutes
 _redis_client = None
 
@@ -26,7 +27,7 @@ async def get_embedding(
     text: str,
     http_client: httpx.AsyncClient | None = None,
 ) -> list[float]:
-    """Generate an embedding vector using Ollama's nomic-embed-text model, with Redis cache."""
+    """Generate an embedding vector using Ollama's qwen3-embedding model, with Redis cache."""
     cache_key = f"pai:embed:{hashlib.sha256(text.encode()).hexdigest()[:24]}"
 
     # Check cache
@@ -42,22 +43,28 @@ async def get_embedding(
     own_client = http_client is None
 
     try:
-        resp = await client.post(
-            f"{settings.ollama_url}/api/embed",
-            json={"model": EMBED_MODEL, "input": text},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        embeddings = data.get("embeddings", [])
-        if embeddings:
-            embedding = embeddings[0]
-            # Cache the result
+        for model in (EMBED_MODEL, EMBED_MODEL_FALLBACK):
             try:
-                redis = await _redis()
-                await redis.set(cache_key, json.dumps(embedding), ex=_EMBED_CACHE_TTL)
-            except Exception:
-                pass
-            return embedding
+                resp = await client.post(
+                    f"{settings.ollama_url}/api/embed",
+                    json={"model": model, "input": text},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                embeddings = data.get("embeddings", [])
+                if embeddings:
+                    embedding = embeddings[0]
+                    try:
+                        redis = await _redis()
+                        await redis.set(cache_key, json.dumps(embedding), ex=_EMBED_CACHE_TTL)
+                    except Exception:
+                        pass
+                    return embedding
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404 and model != EMBED_MODEL_FALLBACK:
+                    logger.warning("Embed model %s unavailable, trying fallback", model)
+                    continue
+                raise
         return []
     finally:
         if own_client:

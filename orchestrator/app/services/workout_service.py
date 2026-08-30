@@ -233,7 +233,17 @@ async def _is_workout_query(user_text: str, http_client=None) -> bool:
         model="qwen3:4b",
         http_client=http_client,
     )
-    return "query" in raw.strip().lower()
+    decision = (raw or "").strip().lower().split()[0] if (raw or "").strip() else ""
+    if decision not in {"query", "command"}:
+        # Heuristic fallback for ambiguous model output.
+        import re
+        lower = user_text.lower()
+        if re.search(r"\b(today|tomorrow|schedule|plan|what.?s\s*my\s*workout|did\s*i\s*work\s*out|history|logs?)\b", lower):
+            return True
+        if re.search(r"\b(log|logged|record|add|did|completed|finished)\b", lower):
+            return False
+        return True
+    return decision == "query"
 
 
 async def process_workout_input(user_text: str, http_client=None) -> dict:

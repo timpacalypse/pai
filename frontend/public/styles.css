@@ -878,3 +878,41 @@ select:focus, input[type="text"]:focus {
     border-radius: 10px;
     font-style: italic;
 }
+
+/* Claude confirmation buttons */
+.claude-confirm {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+.claude-approve-btn {
+    background: linear-gradient(135deg, #D4A574, #c49060);
+    color: #1a1a2e;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    transition: opacity 0.2s;
+}
+.claude-approve-btn:hover { opacity: 0.85; }
+.claude-deny-btn {
+    background: rgba(255,255,255,0.1);
+    color: #b2bec3;
+    border: 1px solid rgba(255,255,255,0.15);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.2s;
+}
+.claude-deny-btn:hover { background: rgba(255,255,255,0.2); }
+.claude-hint {
+    color: #636E72;
+    font-size: 0.8rem;
+    align-self: center;
+    font-style: italic;
+}

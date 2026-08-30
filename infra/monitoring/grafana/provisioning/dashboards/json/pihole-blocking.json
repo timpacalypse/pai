@@ -1,0 +1,626 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Queries Today",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_queries_total", "legendFormat": "Queries" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#00CEC9" },
+          "thresholds": { "steps": [{ "color": "#00CEC9", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "title": "Blocked Today",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_blocked_total", "legendFormat": "Blocked" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#FF7675" },
+          "thresholds": { "steps": [{ "color": "#FF7675", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "title": "Block Rate",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_blocked_percent", "legendFormat": "%" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FFEAA7", "value": 20 },
+              { "color": "#FF7675", "value": 40 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Active Clients",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_unique_clients", "legendFormat": "Clients" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#A29BFE" },
+          "thresholds": { "steps": [{ "color": "#A29BFE", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "title": "Blocklists",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_active_lists", "legendFormat": "Lists" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#FDCB6E" },
+          "thresholds": { "steps": [{ "color": "#FDCB6E", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "title": "Domains on Lists",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_v6_domains_on_blocklist", "legendFormat": "Domains" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#636E72" },
+          "thresholds": { "steps": [{ "color": "#636E72", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Client Blocking",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Blocked Queries by Device",
+      "description": "Which devices are getting the most blocks",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 14, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sort_desc(pihole_client_blocked_total)",
+          "legendFormat": "{{device}} ({{ip}})",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "filterByValue", "options": { "type": "include", "filters": [{ "fieldName": "Value", "config": { "id": "greater", "options": { "value": 0 } } }] } },
+        { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "scheme",
+            "axisBorderShow": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "device" },
+            "properties": [{ "id": "displayName", "value": "Device" }]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.7,
+        "showValue": "always",
+        "xTickLabelRotation": 0,
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "title": "Block Rate by Device",
+      "description": "What percentage of each device's traffic gets blocked",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 10, "x": 14, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sort_desc(pihole_client_blocked_percent > 0)",
+          "legendFormat": "{{device}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "continuous-RdYlGr",
+            "seriesBy": "last"
+          },
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "scheme"
+          }
+        }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.7,
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "title": "Client Detail",
+      "description": "Full breakdown per client: device name, IP, MAC, total queries, blocked, block %",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "pihole_client_queries_total",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "expr": "pihole_client_blocked_total",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "expr": "pihole_client_blocked_percent",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "hostname": true
+            },
+            "renameByName": {
+              "device": "Device",
+              "ip": "IP",
+              "mac": "MAC",
+              "Value #A": "Total Queries",
+              "Value #B": "Blocked",
+              "Value #C": "Block %"
+            },
+            "indexByName": {
+              "Device": 0,
+              "IP": 1,
+              "MAC": 2,
+              "Total Queries": 3,
+              "Blocked": 4,
+              "Block %": 5
+            }
+          }
+        },
+        { "id": "sortBy", "options": { "sort": [{ "field": "Blocked", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Block %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "#55EFC4", "value": null },
+                    { "color": "#FFEAA7", "value": 20 },
+                    { "color": "#FF7675", "value": 50 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background-solid" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Blocked" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF7675", "mode": "fixed" } },
+              { "id": "custom.displayMode", "value": "color-text" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Device" },
+            "properties": [
+              { "id": "custom.width", "value": 200 },
+              { "id": "custom.filterable", "value": true }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Blocked", "desc": true }]
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Blocked Domains & Lists",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Top Blocked Domains",
+      "description": "Most frequently blocked domains across all clients",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 14, "x": 0, "y": 25 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "topk(15, pihole_top_blocked_domain)",
+          "legendFormat": "{{domain}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "sortBy", "options": { "sort": [{ "field": "Value", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 80,
+            "gradientMode": "scheme"
+          }
+        }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.7,
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" },
+        "tooltip": { "mode": "single" }
+      }
+    },
+    {
+      "title": "Your Blocklists",
+      "description": "Configured blocklists with domain counts and status",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 10, "x": 14, "y": 25 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "pihole_list_domains",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "expr": "pihole_list_enabled",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "hostname": true,
+              "list_url": true
+            },
+            "renameByName": {
+              "list_name": "List",
+              "Value #A": "Domains",
+              "Value #B": "Enabled"
+            },
+            "indexByName": {
+              "List": 0,
+              "Domains": 1,
+              "Enabled": 2
+            }
+          }
+        },
+        { "id": "sortBy", "options": { "sort": [{ "field": "Domains", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Enabled" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "0": { "text": "OFF", "color": "#636E72" }, "1": { "text": "ON", "color": "#55EFC4" } } }
+                ]
+              },
+              { "id": "custom.displayMode", "value": "color-background-solid" },
+              { "id": "custom.width", "value": 70 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Domains" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FDCB6E", "mode": "fixed" } },
+              { "id": "custom.displayMode", "value": "color-text" },
+              { "id": "custom.width", "value": 100 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "List" },
+            "properties": [
+              { "id": "custom.width", "value": 300 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Domains", "desc": true }]
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "DNS Routing",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Query Destinations",
+      "description": "Where queries are routed: cache, blocklist, or upstream DNS",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 10, "x": 0, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "pihole_forward_destinations",
+          "legendFormat": "{{destination_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "blocklist" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#FF7675", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "cache" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#55EFC4", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+        "tooltip": { "mode": "single" },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "title": "Upstream DNS Response Time",
+      "description": "Average response time from upstream DNS servers",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 10, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "pihole_forward_destinations_responsetime{destination_name!~\"blocklist|cache\"} * 1000",
+          "legendFormat": "{{destination_name}} ({{destination}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "#00CEC9" },
+          "thresholds": {
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FFEAA7", "value": 20 },
+              { "color": "#FF7675", "value": 50 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "vertical"
+      }
+    },
+    {
+      "title": "Request Rate",
+      "description": "Current DNS requests per second",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_request_rate", "legendFormat": "req/s" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "#00CEC9" },
+          "thresholds": { "steps": [{ "color": "#00CEC9", "value": null }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "title": "Cache Hit Rate",
+      "description": "Percentage of queries served from DNS cache",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 36 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "pihole_queries_cached / pihole_dns_queries_today * 100",
+          "legendFormat": "%"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "color": "#FF7675", "value": null },
+              { "color": "#FFEAA7", "value": 30 },
+              { "color": "#55EFC4", "value": 50 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Pi-hole Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "pihole_status", "legendFormat": "Status" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DISABLED", "color": "#FF7675" }, "1": { "text": "ENABLED", "color": "#55EFC4" } } }
+          ],
+          "thresholds": { "steps": [{ "color": "#FF7675", "value": null }, { "color": "#55EFC4", "value": 1 }] }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["pai", "pihole", "dns", "blocking"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["30s", "1m", "5m", "15m"],
+    "time_options": ["1h", "6h", "12h", "24h", "7d"]
+  },
+  "title": "Pi-hole Blocking",
+  "uid": "pai-pihole-blocking",
+  "refresh": "1m"
+}

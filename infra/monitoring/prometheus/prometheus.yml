@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Pi-hole metrics
+  - job_name: 'pihole'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['pihole-exporter:9617']
+
+  # TP-Link Router via SNMP
+  - job_name: 'snmp-router'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['192.168.0.1']  # TP-Link router IP
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      auth: [tplink_v2c]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter:9116
+
+  # Claude API usage
+  - job_name: 'claude-usage'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['claude-exporter:9618']
+
+  # LLM Gateway Proxy
+  - job_name: 'llm-proxy'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['llm-proxy:8082']
+
+  # Pi-hole v6 (per-client, lists, blocked domains)
+  - job_name: 'pihole-v6'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['pihole-v6-exporter:9620']

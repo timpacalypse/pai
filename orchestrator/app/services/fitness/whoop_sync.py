@@ -49,11 +49,23 @@ async def _load_tokens() -> dict | None:
             text("SELECT sync_cursor FROM fitness_sync_state WHERE platform = 'whoop'"),
         )
         row = result.scalar_one_or_none()
-        if row:
+        if row is None:
+            return None
+        # Depending on DB driver/column type, JSON may come back as a dict or string.
+        if isinstance(row, dict):
+            return row
+        if isinstance(row, (bytes, bytearray)):
             try:
-                return _json_mod.loads(row)
+                row = row.decode("utf-8")
             except Exception:
-                pass
+                return None
+        if isinstance(row, str):
+            try:
+                parsed = _json_mod.loads(row)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
     return None
 
 
@@ -100,6 +112,10 @@ async def _get_access_token() -> str | None:
                 refreshed = await _refresh_access_token(refresh_token)
                 if refreshed:
                     return refreshed.get("access_token")
+            # Fallback to currently stored token; WHOOP endpoints will 401 if
+            # truly expired, and _sync_workouts handles that explicit refresh path.
+            if access_token:
+                return access_token
             return None
     except Exception:
         pass
@@ -107,7 +123,7 @@ async def _get_access_token() -> str | None:
     return access_token
 
 
-async def sync_whoop() -> dict:
+async def sync_whoop(backfill_days: int | None = None) -> dict:
     """Sync all Whoop data. Returns summary of records synced."""
     access_token = await _get_access_token()
     if not access_token:
@@ -118,9 +134,15 @@ async def sync_whoop() -> dict:
     async with httpx.AsyncClient(timeout=30.0) as client:
         headers = {"Authorization": f"Bearer {access_token}"}
 
-        # Get last sync time
+        # Get last sync time. If explicitly requested, use a wider backfill
+        # window to recover historical data (e.g., > 1 year).
         last_sync = await _get_last_sync("whoop")
-        start_dt = last_sync or (datetime.now(timezone.utc) - timedelta(days=30))
+        if backfill_days and backfill_days > 0:
+            start_dt = datetime.now(timezone.utc) - timedelta(days=int(backfill_days))
+        else:
+            start_dt = last_sync or (
+                datetime.now(timezone.utc) - timedelta(days=max(1, int(settings.whoop_backfill_days)))
+            )
         params = {"start": start_dt.isoformat(), "limit": 25}
 
         try:
@@ -141,7 +163,9 @@ async def sync_whoop() -> dict:
             logger.error("whoop_sleep_sync_failed", extra={"error": str(e)})
             summary["errors"].append(f"sleep: {e}")
 
-    await _update_sync_state("whoop", sum(v for k, v in summary.items() if isinstance(v, int)))
+    status = "error" if summary["errors"] else "ok"
+    await _update_sync_state("whoop", sum(v for k, v in summary.items() if isinstance(v, int)), status=status)
+    summary["status"] = status
     logger.info("whoop_sync_complete", extra=summary)
     return summary
 
@@ -374,18 +398,18 @@ async def _get_last_sync(platform: str) -> datetime | None:
         return row
 
 
-async def _update_sync_state(platform: str, records: int):
+async def _update_sync_state(platform: str, records: int, status: str = "ok"):
     async with async_session() as session:
         await session.execute(
             text("""
                 INSERT INTO fitness_sync_state (platform, last_sync_at, status, records_synced, updated_at)
-                VALUES (:platform, NOW(), 'ok', :records, NOW())
+                VALUES (:platform, NOW(), :status, :records, NOW())
                 ON CONFLICT (platform) DO UPDATE SET
-                    last_sync_at = NOW(), status = 'ok',
+                    last_sync_at = NOW(), status = :status,
                     records_synced = fitness_sync_state.records_synced + :records,
                     updated_at = NOW()
             """),
-            {"platform": platform, "records": records},
+            {"platform": platform, "records": records, "status": status},
         )
         await session.commit()
 

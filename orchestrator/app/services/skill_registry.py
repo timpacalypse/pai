@@ -22,6 +22,7 @@ class Skill:
     read_handler: Callable | None = None    # async fn(message, http_client) -> str
     write_handler: Callable | None = None   # async fn(message, http_client) -> str
     category: str = "general"         # grouping for display
+    model_preference: str = "local"   # "local" | "cloud" — hints router to use Claude
 
 
 _REGISTRY: dict[str, Skill] = {}
@@ -107,6 +108,14 @@ def register_all_skills():
                         break
 
         parts = []
+        medical_records = await search_semantic(
+            message, limit=5, http_client=http_client, source_prefix="medical:"
+        )
+        if medical_records:
+            parts.append("Structured medical record matches:")
+            for d in medical_records:
+                parts.append(f"  [{d['source']}]\n{d['content']}")
+
         if mentioned_names:
             # Search documents scoped to each mentioned family member
             for name in mentioned_names:
@@ -232,18 +241,48 @@ def register_all_skills():
     # ── Recipes ──
     async def _recipe_read(message, http_client=None):
         from app.services.recipe_service import get_recipes
-        recipes = await get_recipes(search=message, limit=10)
+        from app.memory.semantic import search_semantic
+        import re
+
+        msg_lower = (message or "").lower()
+
+        # Count/list style questions should use DB facts only (avoid noisy semantic snippets).
+        if re.search(r'\b(how\s*many|count|total|number\s*of)\b', msg_lower) and re.search(r'\brecipes?\b', msg_lower):
+            all_recipes = await get_recipes(limit=200)
+            total = len(all_recipes)
+            lines = [f"You have {total} saved recipe(s)."]
+            if total:
+                preview = ", ".join(r.get("title", "?") for r in all_recipes[:8])
+                lines.append(f"Saved recipes: {preview}")
+            return "\n".join(lines)
+
+        semantic_hits = await search_semantic(
+            message, limit=5, http_client=http_client, source_prefix="recipe:"
+        )
+
+        parts = []
+        if semantic_hits:
+            parts.append("Recipe knowledge matches:")
+            for h in semantic_hits:
+                parts.append(f"  [{h['source']}]\n{h['content']}")
+
+        if re.search(r'\b(my\s*recipes|saved\s*recipes|all\s*recipes|list\s*recipes|show\s*recipes)\b', msg_lower):
+            recipes = await get_recipes(limit=30)
+        else:
+            recipes = await get_recipes(search=message, limit=10)
+
         if not recipes:
-            return "No recipes found matching that query."
+            return "\n\n".join(parts) if parts else "No recipes found matching that query."
         lines = [f"Found {len(recipes)} recipe(s):"]
         for r in recipes:
             rating = f" (rating: {r['family_rating']}/5)" if r.get("family_rating") else ""
             lines.append(f"  - {r['title']} [{r.get('cuisine','')}]{rating}")
-        return "\n".join(lines)
+        parts.append("\n".join(lines))
+        return "\n\n".join(parts)
 
     async def _recipe_write(message, http_client=None):
         from app.services.recipe_service import ingest_recipe_text
-        result = await ingest_recipe_text(message)
+        result = await ingest_recipe_text(message, http_client=http_client)
         if result.get("error"):
             return f"Could not parse recipe: {result['error']}"
         r = result["recipe"]
@@ -288,6 +327,7 @@ def register_all_skills():
         read_handler=_briefing_read,
         write_handler=_briefing_write,
         category="professional",
+        model_preference="cloud",
     ))
 
     # ── Web Research ──
@@ -390,7 +430,20 @@ def register_all_skills():
 
     # ── Meal Feedback ──
     async def _feedback_read(message, http_client=None):
-        from app.services.meal_planner import get_meal_ratings
+        from app.services.meal_planner import get_favorite_meals, get_meal_ratings
+        msg = (message or "").lower()
+        if any(k in msg for k in ["favorite", "favourite", "best", "top", "most loved", "most liked"]):
+            favorites = await get_favorite_meals(limit=8)
+            if not favorites:
+                return "I don't have enough meal feedback yet to rank favorites."
+            lines = ["Top favorite meals from your ratings and recipes:"]
+            for item in favorites:
+                lines.append(
+                    f"  - {item.get('item_name', '?')}: {item.get('score', '?')}/5 "
+                    f"({item.get('source', 'unknown')}, votes: {item.get('votes', 0)})"
+                )
+            return "\n".join(lines)
+
         ratings = await get_meal_ratings(limit=10)
         if not ratings:
             return "No meal ratings recorded yet."
@@ -586,6 +639,7 @@ def register_all_skills():
         read_handler=_article_curation_read,
         write_handler=_article_curation_write,
         category="professional",
+        model_preference="cloud",
     ))
 
     # ── Memory ──
@@ -674,6 +728,7 @@ def register_all_skills():
         read_handler=_linkedin_read,
         write_handler=_linkedin_read,
         category="professional",
+        model_preference="cloud",
     ))
 
     # ── Weekly Security Digest ──
@@ -690,6 +745,7 @@ def register_all_skills():
         read_handler=_digest_read,
         write_handler=_digest_read,
         category="professional",
+        model_preference="cloud",
     ))
 
     # ── Tonight's Dinner ──
@@ -710,18 +766,27 @@ def register_all_skills():
 
     # ── Fitness platform skills ──
 
+    def _fitness_days_from_message(message: str, default_days: int) -> int:
+        lower = message.lower()
+        if any(token in lower for token in ["year", "annual", "365"]):
+            return 365
+        if any(token in lower for token in ["quarter", "90 days", "3 month", "3-month"]):
+            return 90
+        if "month" in lower or "30" in lower:
+            return 30
+        if "2 week" in lower or "14" in lower:
+            return 14
+        if "week" in lower or "7" in lower:
+            return 7
+        return default_days
+
     async def _fitness_summary_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_fitness_summary
-        return await get_fitness_summary(days=7)
+        return await get_fitness_summary(days=_fitness_days_from_message(message, 7))
 
     async def _fitness_detailed_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_fitness_summary
-        days = 7
-        lower = message.lower()
-        if "month" in lower or "30" in lower:
-            days = 30
-        elif "2 week" in lower or "14" in lower:
-            days = 14
+        days = _fitness_days_from_message(message, 7)
         return await get_fitness_summary(days=days)
 
     async def _fitness_sync_write(message, http_client=None):
@@ -746,12 +811,8 @@ def register_all_skills():
 
     async def _workout_history_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_workout_details
-        days = 7
+        days = _fitness_days_from_message(message, 7)
         lower = message.lower()
-        if "month" in lower or "30" in lower:
-            days = 30
-        elif "2 week" in lower or "14" in lower:
-            days = 14
         platform = ""
         if "whoop" in lower:
             platform = "whoop"
@@ -775,10 +836,7 @@ def register_all_skills():
 
     async def _recovery_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_recovery_trends
-        days = 14
-        lower = message.lower()
-        if "month" in lower or "30" in lower:
-            days = 30
+        days = _fitness_days_from_message(message, 14)
         return await get_recovery_trends(days=days)
 
     register_skill(Skill(
@@ -796,10 +854,7 @@ def register_all_skills():
 
     async def _sleep_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_sleep_analysis
-        days = 14
-        lower = message.lower()
-        if "month" in lower or "30" in lower:
-            days = 30
+        days = _fitness_days_from_message(message, 14)
         return await get_sleep_analysis(days=days)
 
     register_skill(Skill(
@@ -817,10 +872,7 @@ def register_all_skills():
 
     async def _strength_read(message, http_client=None):
         from app.services.fitness.fitness_query import get_strength_progress
-        days = 30
-        lower = message.lower()
-        if "week" in lower or "7" in lower:
-            days = 7
+        days = _fitness_days_from_message(message, 30)
         return await get_strength_progress(days=days)
 
     register_skill(Skill(
@@ -1352,6 +1404,7 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             get_monthly_review,
             suggest_daily_priorities,
             get_daily_priorities,
+            get_daily_goals,
             parse_planner_command,
         )
         from datetime import timedelta
@@ -1406,20 +1459,31 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
         if action == "show_day_goals":
             from datetime import date
             target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
-            goals = await get_daily_priorities(target)
+            goals = await get_daily_goals(target)
             heading = "Tomorrow's Goals" if cmd.get("day") == "tomorrow" else "Today's Goals"
             if not goals:
                 if cmd.get("day") == "tomorrow":
                     return "No goals saved for tomorrow yet. Add them with: planner goals for tomorrow: goal 1, goal 2, goal 3"
-                recs = await suggest_daily_priorities(limit=3)
-                lines = [f"**{heading}:**"]
-                for i, r in enumerate(recs["recommendations"], 1):
-                    lines.append(f"{i}. **{r['text']}**")
-                return "\n".join(lines)
+                return "No goals saved for today yet. Add one with: goal for today: <text>"
             lines = [f"**{heading} in Planner:**"]
             for g in goals:
                 mark = "✅" if g.get("completed") else "❌"
                 lines.append(f"{g['slot']}. {g['title']} {mark}")
+            return "\n".join(lines)
+
+        if action == "show_day_tasks":
+            from datetime import date
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            tasks = await get_daily_priorities(target)
+            heading = "Tomorrow's Tasks" if cmd.get("day") == "tomorrow" else "Today's Tasks"
+            if not tasks:
+                if cmd.get("day") == "tomorrow":
+                    return "No tasks saved for tomorrow yet. Add them with: task for tomorrow: <text>"
+                return "No tasks saved for today yet. Add one with: task for today: <text>"
+            lines = [f"**{heading} in Planner:**"]
+            for t in tasks:
+                mark = "✅" if t.get("completed") else "❌"
+                lines.append(f"{t['slot']}. {t['title']} {mark}")
             return "\n".join(lines)
 
         plan = await get_current_plan()
@@ -1472,6 +1536,8 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             set_daily_priority,
             set_daily_priority_for_date,
             replace_daily_priorities_for_date,
+            set_daily_goal_for_date,
+            replace_daily_goals_for_date,
             complete_daily_priority,
             complete_weekly_goal,
             complete_monthly_goal,
@@ -1533,6 +1599,22 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
             return f"Saved {day_label} priority P{result['slot']}: {result['title']}"
 
+        if action == "set_daily_task_for_day":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            result = await set_daily_priority_for_date(cmd["text"], for_date=target, slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            return f"Saved {day_label} task T{result['slot']}: {result['title']}"
+
+        if action == "set_daily_goal_for_day":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            result = await set_daily_goal_for_date(cmd["text"], for_date=target, slot=cmd.get("slot"))
+            if result.get("error"):
+                return result["error"]
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            return f"Saved {day_label} goal G{result['slot']}: {result['title']}"
+
         if action == "set_daily_batch":
             target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
             items = parse_goal_items(cmd.get("text", ""))
@@ -1543,6 +1625,34 @@ Do NOT use hashtags or emoji. Do NOT be generic."""
             lines = [f"Saved {result['saved']} goals for {day_label}."]
             for item in result.get("items", []):
                 lines.append(f"  P{item['slot']}: {item['title']}")
+            if result.get("truncated"):
+                lines.append(f"Note: kept top 3 only ({result['truncated']} extra omitted).")
+            return "\n".join(lines)
+
+        if action == "set_daily_task_batch":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            items = parse_goal_items(cmd.get("text", ""))
+            if not items:
+                return "I didn't find any tasks in that message. Try: tasks for today: task 1, task 2, task 3"
+            result = await replace_daily_priorities_for_date(items, for_date=target)
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            lines = [f"Saved {result['saved']} tasks for {day_label}."]
+            for item in result.get("items", []):
+                lines.append(f"  T{item['slot']}: {item['title']}")
+            if result.get("truncated"):
+                lines.append(f"Note: kept top 3 only ({result['truncated']} extra omitted).")
+            return "\n".join(lines)
+
+        if action == "set_daily_goal_batch":
+            target = date.today() + timedelta(days=1) if cmd.get("day") == "tomorrow" else date.today()
+            items = parse_goal_items(cmd.get("text", ""))
+            if not items:
+                return "I didn't find any goals in that message. Try: goals for today: goal 1, goal 2, goal 3"
+            result = await replace_daily_goals_for_date(items, for_date=target)
+            day_label = "tomorrow" if cmd.get("day") == "tomorrow" else "today"
+            lines = [f"Saved {result['saved']} goals for {day_label}."]
+            for item in result.get("items", []):
+                lines.append(f"  G{item['slot']}: {item['title']}")
             if result.get("truncated"):
                 lines.append(f"Note: kept top 3 only ({result['truncated']} extra omitted).")
             return "\n".join(lines)

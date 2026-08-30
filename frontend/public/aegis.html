@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>PAI</title>
-    <link rel="stylesheet" href="aegis.css?v=20260716a">
+    <link rel="stylesheet" href="aegis.css?v=20260729a">
 </head>
 <body>
     <div class="radial-core" aria-hidden="true"></div>
@@ -87,18 +87,24 @@
         </div>
 
         <aside class="dash-panel dash-right">
-            <div class="dash-card" id="card-transcript">
-                <div class="dash-label">LAST EXCHANGE</div>
-                <div class="dash-transcript" id="dash-transcript">Awaiting input...</div>
+            <div class="dash-card" id="card-goals">
+                <div class="dash-label">TODAY'S GOALS</div>
+                <div class="dash-transcript" id="dash-goals">No goals set for today.</div>
             </div>
-            <div class="dash-card" id="card-response">
-                <div class="dash-label">RESPONSE</div>
-                <div class="dash-transcript" id="dash-response">--</div>
+            <div class="dash-card" id="card-tasks">
+                <div class="dash-label">TODAY'S TASKS</div>
+                <div class="dash-transcript" id="dash-tasks">No suggested tasks.</div>
             </div>
             <div class="dash-card" id="card-system">
                 <div class="dash-label">SYSTEM</div>
                 <div class="dash-value" id="dash-status">ONLINE</div>
-                <div class="dash-sub" id="dash-model">qwen3:8b</div>
+                <div class="dash-sub" id="dash-model">--</div>
+            </div>
+            <div class="dash-card pomodoro-card" id="card-pomodoro" hidden>
+                <div class="dash-label">POMODORO</div>
+                <div class="dash-value pomodoro-time" id="pomodoro-time">25:00</div>
+                <div class="dash-sub" id="pomodoro-status">Ready</div>
+                <div class="dash-sub pomodoro-help" id="pomodoro-help">Say: hey aegis start pomodoro for 25 minutes</div>
             </div>
         </aside>
 
@@ -120,6 +126,6 @@
         </form>
     </main>
 
-    <script src="aegis.js?v=20260716a"></script>
+    <script src="aegis.js?v=20260729a"></script>
 </body>
 </html>

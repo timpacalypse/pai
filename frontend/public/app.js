@@ -20,6 +20,7 @@ const state = {
     sending: false,
     userId: null,
     userName: '',
+    pendingClaude: null,  // { message, tier, score } when awaiting Claude confirmation
 };
 
 // ── DOM refs ──
@@ -273,6 +274,53 @@ async function handleSend() {
     const text = inputEl.value.trim();
     if (!text || state.sending) return;
 
+    // Check if this is a Claude confirmation reply
+    if (state.pendingClaude) {
+        const lower = text.toLowerCase();
+        const confirmPhrases = ['yes', 'y', 'use claude', 'confirm', 'ok', 'go ahead', 'do it', 'sure', 'approve'];
+        const denyPhrases = ['no', 'n', 'cancel', 'skip', 'local', 'nevermind', 'nah', 'deny'];
+
+        if (confirmPhrases.some(p => lower === p || lower.startsWith(p))) {
+            const origMessage = state.pendingClaude.message;
+            state.pendingClaude = null;
+            addMessage(text, 'user');
+            inputEl.value = '';
+            state.sending = true;
+            sendBtn.disabled = true;
+            const loadingEl = addLoading();
+            try {
+                await sendChatStream(origMessage, loadingEl, true);
+            } catch (e) {
+                loadingEl.remove();
+                addMessage(`Error: ${e.message}`, 'ai', 'error');
+            }
+            state.sending = false;
+            sendBtn.disabled = false;
+            inputEl.focus();
+            return;
+        } else if (denyPhrases.some(p => lower === p || lower.startsWith(p))) {
+            const origMessage = state.pendingClaude.message;
+            state.pendingClaude = null;
+            addMessage(text, 'user');
+            inputEl.value = '';
+            state.sending = true;
+            sendBtn.disabled = true;
+            const loadingEl = addLoading();
+            try {
+                await sendChatStream(origMessage, loadingEl, false, true);
+            } catch (e) {
+                loadingEl.remove();
+                addMessage(`Error: ${e.message}`, 'ai', 'error');
+            }
+            state.sending = false;
+            sendBtn.disabled = false;
+            inputEl.focus();
+            return;
+        }
+        // Not a confirmation — treat as new message, clear pending
+        state.pendingClaude = null;
+    }
+
     addMessage(text, 'user');
     inputEl.value = '';
     state.sending = true;
@@ -340,15 +388,17 @@ async function handleSend() {
     inputEl.focus();
 }
 
-async function sendChatStream(message, loadingEl) {
+async function sendChatStream(message, loadingEl, confirmClaude = false, forceLocal = false) {
     const body = {
         message,
         conversation_id: state.conversationId,
         history: state.history,
         user_id: state.userId,
     };
+    if (confirmClaude) body.confirm_claude = true;
 
-    const resp = await fetch(`${API}/chat/stream`, {
+    const endpoint = forceLocal ? `${API}/chat/stream?force_local=1` : `${API}/chat/stream`;
+    const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -412,6 +462,44 @@ async function sendChatStream(message, loadingEl) {
                     if (evt.duration_ms) {
                         const dur = `${Math.round(evt.duration_ms)}ms`;
                         metaEl.innerHTML += ` <span class="role-tag">${dur}</span>`;
+                    }
+                    if (meta.model) {
+                        metaEl.innerHTML += ` <span class="role-tag">${escapeHtml(meta.model)}</span>`;
+                    }
+
+                    // Show Claude confirmation buttons if needed
+                    if (meta.claude_required) {
+                        const tier = meta.claude_required;
+                        const score = meta.complexity_score || '?';
+                        // Store pending state for text confirmation
+                        state.pendingClaude = { message, tier, score };
+
+                        const btnWrap = document.createElement('div');
+                        btnWrap.className = 'claude-confirm';
+                        btnWrap.innerHTML = `
+                            <button class="claude-approve-btn" data-tier="${tier}">✓ Use Claude (${tier})</button>
+                            <button class="claude-deny-btn">✗ Use local model</button>
+                            <span class="claude-hint">or type yes/no</span>
+                        `;
+                        div.appendChild(btnWrap);
+
+                        btnWrap.querySelector('.claude-approve-btn').addEventListener('click', async () => {
+                            state.pendingClaude = null;
+                            btnWrap.remove();
+                            contentEl.innerHTML = '<em>Sending to Claude...</em>';
+                            await sendChatStream(message, null, true);
+                        });
+                        btnWrap.querySelector('.claude-deny-btn').addEventListener('click', async () => {
+                            state.pendingClaude = null;
+                            btnWrap.remove();
+                            contentEl.innerHTML = '<em>Generating with local model...</em>';
+                            div.remove();
+                            const newLoading = addLoading();
+                            if (state.history.length > 0 && state.history[state.history.length - 1].role_name === 'assistant') {
+                                state.history.pop();
+                            }
+                            await sendChatStream(message, newLoading, false, true);
+                        });
                     }
                 }
             } catch (e) { /* skip malformed events */ }

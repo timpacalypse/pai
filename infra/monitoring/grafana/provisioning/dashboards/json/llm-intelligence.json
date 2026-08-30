@@ -1,0 +1,806 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 2,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Network Dashboard",
+      "type": "link",
+      "url": "/d/pai-network-overview"
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "⚡ Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Total Requests",
+      "description": "All LLM requests routed through the proxy",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_requests_total)", "legendFormat": "Requests" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#6C5CE7" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#6C5CE7", "value": null }]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Input Tokens",
+      "description": "Total input/prompt tokens consumed",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_input_tokens_total)", "legendFormat": "Input" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#00CEC9" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#00CEC9", "value": null }]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Output Tokens",
+      "description": "Total output/completion tokens generated",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_output_tokens_total)", "legendFormat": "Output" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#FDA7DF" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#FDA7DF", "value": null }]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Estimated Cost",
+      "description": "Total estimated spend across all providers",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_cost_usd_total)", "legendFormat": "Cost" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": { "mode": "fixed", "fixedColor": "#FFEAA7" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FFEAA7", "value": 1 },
+              { "color": "#FF7675", "value": 5 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Cache Hit Rate",
+      "description": "Percentage of requests served from cache",
+      "type": "gauge",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_proxy_cache_hits_total[1h])) / (sum(rate(llm_proxy_requests_total[1h])) + 0.001) * 100",
+          "legendFormat": "Hit %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#636E72", "value": null },
+              { "color": "#FDCB6E", "value": 10 },
+              { "color": "#00B894", "value": 40 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdMarkers": true,
+        "showThresholdLabels": false
+      }
+    },
+    {
+      "title": "Avg Latency (p50)",
+      "description": "Median response latency across all providers",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_proxy_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "#74B9FF" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00B894", "value": null },
+              { "color": "#FDCB6E", "value": 5 },
+              { "color": "#FF7675", "value": 15 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "📊 Token Usage",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Token Throughput by Model",
+      "description": "Input vs output token rates per model over time",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_proxy_input_tokens_total[5m])) by (model)",
+          "legendFormat": "⬆ {{model}}"
+        },
+        {
+          "expr": "sum(rate(llm_proxy_output_tokens_total[5m])) by (model)",
+          "legendFormat": "⬇ {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": true,
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "scaleDistribution": { "type": "linear" }
+          },
+          "color": { "mode": "palette-classic-by-name" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "mean"] }
+      }
+    },
+    {
+      "title": "Requests by Provider",
+      "description": "Distribution of requests across LLM providers",
+      "type": "piechart",
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(llm_proxy_requests_total) by (provider)",
+          "legendFormat": "{{provider}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "anthropic" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#D4A574", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "openai" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#74B9FF", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ollama" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#55EFC4", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "pieType": "donut",
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "values": ["value", "percent"] }
+      }
+    },
+    {
+      "type": "row",
+      "title": "⏱ Performance & Efficiency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Response Latency",
+      "description": "p50 and p95 response times — how fast are your LLMs responding",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_proxy_latency_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "p50 {{provider}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_proxy_latency_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "p95 {{provider}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "scheme",
+            "showPoints": "auto",
+            "pointSize": 4,
+            "spanNulls": true,
+            "axisBorderShow": false
+          },
+          "color": { "mode": "palette-classic-by-name" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "p95.*" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }
+      }
+    },
+    {
+      "title": "Request Rate",
+      "description": "Requests per second flowing through the proxy",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_proxy_requests_total[5m])) by (provider)",
+          "legendFormat": "{{provider}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "hue",
+            "stacking": { "mode": "normal", "group": "A" },
+            "barAlignment": 0,
+            "showPoints": "never",
+            "axisBorderShow": false
+          },
+          "color": { "mode": "palette-classic-by-name" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "anthropic" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#D4A574", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "openai" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#74B9FF", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ollama" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#55EFC4", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "type": "row",
+      "title": "💰 Cost Tracking",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Cost Over Time",
+      "description": "Cumulative estimated cost by provider",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(llm_proxy_cost_usd_total) by (provider)",
+          "legendFormat": "{{provider}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisBorderShow": false,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "color": { "mode": "palette-classic-by-name" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "anthropic" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#D4A574", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "openai" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#74B9FF", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ollama" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#55EFC4", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "title": "Cost by Model",
+      "description": "Spend breakdown per model",
+      "type": "bargauge",
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(llm_proxy_cost_usd_total) by (model)",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FDCB6E", "value": 0.5 },
+              { "color": "#E17055", "value": 2 },
+              { "color": "#D63031", "value": 10 }
+            ]
+          },
+          "color": { "mode": "continuous-BlYlRd" }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "minVizWidth": 8,
+        "minVizHeight": 16,
+        "valueMode": "text"
+      }
+    },
+    {
+      "title": "Token Efficiency",
+      "description": "Output/Input token ratio — higher means more verbose responses",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(llm_proxy_output_tokens_total) / (sum(llm_proxy_input_tokens_total) + 0.001)",
+          "legendFormat": "Out/In Ratio"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "#A29BFE" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#74B9FF", "value": null },
+              { "color": "#A29BFE", "value": 2 },
+              { "color": "#E17055", "value": 10 }
+            ]
+          },
+          "mappings": [
+            { "type": "special", "options": { "match": "null", "result": { "text": "—" } } }
+          ]
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Cache Savings",
+      "description": "Requests saved by caching",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(llm_proxy_cache_hits_total) or vector(0)",
+          "legendFormat": "Cache Hits"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#00B894" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#00B894", "value": null }]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "📡 PAI Claude Usage",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Claude Tokens",
+      "description": "Total Claude tokens through the proxy",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_input_tokens_total{provider=\"anthropic\"}) or vector(0)", "legendFormat": "Input" },
+        { "expr": "sum(llm_proxy_output_tokens_total{provider=\"anthropic\"}) or vector(0)", "legendFormat": "Output" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00CEC9", "value": null },
+              { "color": "#FDCB6E", "value": 500000 },
+              { "color": "#FF7675", "value": 2000000 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Input" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#00CEC9", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Output" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#FDA7DF", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "title": "Claude Cost",
+      "description": "Estimated Claude API cost through the proxy",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 6, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_cost_usd_total{provider=\"anthropic\"}) or vector(0)", "legendFormat": "Total" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FFEAA7", "value": 1 },
+              { "color": "#FF7675", "value": 5 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Claude Requests",
+      "description": "Total Claude API requests through the proxy",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 10, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_requests_total{provider=\"anthropic\"}) or vector(0)", "legendFormat": "Requests" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#A29BFE" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#A29BFE", "value": null }]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Avg Latency",
+      "description": "Average Claude response latency",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 14, "y": 37 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(llm_proxy_latency_seconds_sum{provider=\"anthropic\"}) / sum(llm_proxy_latency_seconds_count{provider=\"anthropic\"}) or vector(0)", "legendFormat": "Avg" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "#D4A574" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#55EFC4", "value": null },
+              { "color": "#FFEAA7", "value": 5 },
+              { "color": "#FF7675", "value": 15 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "Claude Token Usage Over Time",
+      "description": "Claude input vs output token rate from proxy",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 18, "x": 0, "y": 42 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(llm_proxy_input_tokens_total{provider=\"anthropic\"}[5m])) * 60 or vector(0)", "legendFormat": "Input tokens/min" },
+        { "expr": "sum(rate(llm_proxy_output_tokens_total{provider=\"anthropic\"}[5m])) * 60 or vector(0)", "legendFormat": "Output tokens/min" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "showPoints": "auto",
+            "pointSize": 4,
+            "spanNulls": true,
+            "axisBorderShow": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Input tokens/min" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#00CEC9", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Output tokens/min" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#FDA7DF", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean"] }
+      }
+    },
+    {
+      "title": "Claude by Model",
+      "description": "Requests and cost breakdown by Claude model",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 42 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "llm_proxy_requests_total{provider=\"anthropic\"}", "legendFormat": "{{model}}", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "llm_proxy_cost_usd_total{provider=\"anthropic\"}", "legendFormat": "{{model}}", "format": "table", "instant": true, "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Value #A" },
+            "properties": [
+              { "id": "displayName", "value": "Requests" },
+              { "id": "color", "value": { "fixedColor": "#A29BFE", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Value #B" },
+            "properties": [
+              { "id": "displayName", "value": "Cost" },
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 4 },
+              { "id": "color", "value": { "fixedColor": "#D4A574", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "model" },
+            "properties": [{ "id": "displayName", "value": "Model" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Time" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "__name__" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "cache_hit" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "instance" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "job" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "provider" },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "transformations": [
+        { "id": "merge", "options": {} }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Requests", "desc": true }]
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["pai", "llm", "ai", "proxy"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d"]
+  },
+  "title": "LLM Intelligence",
+  "uid": "pai-llm-intelligence",
+  "refresh": "30s"
+}

@@ -1,0 +1,150 @@
+# PAI Network Monitoring - Synology NAS (192.168.0.5)
+# Deploy to: /volume1/docker/pai-monitoring/
+# Run: docker compose up -d --build
+
+services:
+
+  # ── Grafana (Dashboard UI) ──
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: pai-grafana
+    ports:
+      - "3001:3000"
+    user: "0"  # Synology volume permissions
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://192.168.0.5:3001"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Prometheus (Metrics Store) ──
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: pai-prometheus
+    ports:
+      - "9090:9090"
+    user: "0"  # Synology volume permissions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./data/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=90d'
+      - '--web.enable-lifecycle'
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Pi-hole Exporter (v6 compatible) ──
+  pihole-exporter:
+    image: ekofr/pihole-exporter:v1.2.0
+    container_name: pai-pihole-exporter
+    environment:
+      PIHOLE_HOSTNAME: 192.168.0.192
+      PIHOLE_PASSWORD: ${PIHOLE_PASSWORD:-}
+      PIHOLE_PORT: "80"
+      PORT: "9617"
+    ports:
+      - "9617:9617"
+    networks:
+      - monitoring
+      - pihole_macvlan
+    restart: unless-stopped
+
+  # ── SNMP Exporter (TP-Link Router) ──
+  snmp-exporter:
+    image: prom/snmp-exporter:v0.26.0
+    container_name: pai-snmp-exporter
+    ports:
+      - "9116:9116"
+    volumes:
+      - ./snmp/snmp.yml:/etc/snmp_exporter/snmp.yml:ro
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Claude Usage Exporter (reads from PAI Redis) ──
+  claude-exporter:
+    build:
+      context: ./exporters/claude-usage
+      dockerfile: Dockerfile
+    container_name: pai-claude-exporter
+    ports:
+      - "9618:9618"
+    environment:
+      REDIS_URL: "redis://192.168.0.58:6379"
+      EXPORTER_PORT: "9618"
+      SCRAPE_INTERVAL: "60"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── LLM Gateway Proxy ──
+  llm-proxy:
+    build:
+      context: ./exporters/llm-proxy
+      dockerfile: Dockerfile
+    container_name: pai-llm-proxy
+    ports:
+      - "8082:8082"
+    environment:
+      ANTHROPIC_BASE_URL: "https://api.anthropic.com"
+      OPENAI_BASE_URL: "https://api.openai.com"
+      OLLAMA_BASE_URL: "http://192.168.0.58:11434"
+      EMBEDDING_MODEL: "qwen3-embedding:0.6b"
+      REDIS_URL: "redis://proxy-redis:6379"
+      CACHE_TTL: "3600"
+      SIMILARITY_THRESHOLD: "0.97"
+      PROXY_PORT: "8082"
+    volumes:
+      - proxy-data:/data
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Proxy Redis (separate from PAI Redis — keeps proxy cache isolated) ──
+  proxy-redis:
+    image: redis:7-alpine
+    container_name: pai-proxy-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - proxy-redis-data:/data
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Pi-hole v6 Exporter (per-client blocked, lists, device labels) ──
+  pihole-v6-exporter:
+    build:
+      context: ./exporters/pihole-v6
+      dockerfile: Dockerfile
+    container_name: pai-pihole-v6-exporter
+    ports:
+      - "9620:9620"
+    environment:
+      PIHOLE_URL: "http://192.168.0.192"
+      PIHOLE_PASSWORD: "${PIHOLE_PASSWORD:-}"
+      EXPORTER_PORT: "9620"
+      SCRAPE_INTERVAL: "60"
+    networks:
+      - monitoring
+      - pihole_macvlan
+    restart: unless-stopped
+
+volumes:
+  proxy-data:
+  proxy-redis-data:
+
+networks:
+  monitoring:
+    driver: bridge
+  pihole_macvlan:
+    external: true

@@ -17,6 +17,14 @@ RUN apt-get update && \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js (for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (uses Pro/Max subscription via OAuth)
+RUN npm install -g @anthropic-ai/claude-code
+
 # Install piper TTS binary
 # piper releases: https://github.com/rhasspy/piper/releases
 ARG PIPER_VERSION=2023.11.14-2

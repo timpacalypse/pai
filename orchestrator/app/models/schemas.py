@@ -114,6 +114,7 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = []
     request_id: UUID = Field(default_factory=uuid4)
     user_id: int | None = None
+    confirm_claude: bool = False  # set True to approve Claude usage after prompt
 
 
 class ChatResponse(BaseModel):
@@ -125,6 +126,9 @@ class ChatResponse(BaseModel):
     content: str
     intent: str = "conversation"
     duration_ms: float
+    model_used: str | None = None
+    claude_required: str | None = None  # "sonnet" or "haiku" if Claude approval needed
+    complexity_score: int | None = None  # 1-10 complexity rating
 
 
 class OrchestratorDecision(BaseModel):

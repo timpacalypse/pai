@@ -43,13 +43,15 @@ async def classify_intent(task_input: str, http_client=None) -> IntentType:
         return IntentType.conversation
     if lower.rstrip().endswith("?") and len(lower.split()) < 15:
         return IntentType.question
+    if re.match(r'^(what|when|where|who|why|how|can\s+you|could\s+you|do\s+you|is\s+there|are\s+there)\b', lower):
+        return IntentType.question
     if re.search(r'\b(analyze|compare|evaluate|assess|audit|review|pros\s+and\s+cons)\b', lower):
         return IntentType.analysis
     if re.search(r'\b(plan|roadmap|strategy|prioritize|timeline|schedule)\b', lower):
         return IntentType.planning
     if re.search(r'\b(research|investigate|survey|explore|find\s+out|look\s+into)\b', lower):
         return IntentType.research
-    if re.search(r'\b(create|build|implement|deploy|configure|run|execute|add|set\s+up)\b', lower):
+    if re.search(r'\b(create|build|implement|deploy|configure|run|execute|add|set\s+up|fix|patch|update|refactor)\b', lower):
         return IntentType.execution
     if re.search(r'\b(write|draft|compose|brainstorm)\b', lower):
         return IntentType.creative
@@ -73,4 +75,4 @@ async def classify_intent(task_input: str, http_client=None) -> IntentType:
     except Exception as e:
         logger.warning("intent_classification_failed", extra={"error": str(e)})
 
-    return IntentType.question
+    return IntentType.conversation

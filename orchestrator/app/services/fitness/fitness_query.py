@@ -94,9 +94,45 @@ async def trigger_sync() -> str:
             status = result.get("status", "ok")
             if status == "skipped":
                 results.append(f"{name}: skipped ({result.get('reason', '')})")
+            elif status == "error":
+                error_text = "; ".join(result.get("errors", [])) if isinstance(result.get("errors"), list) else result.get("error", "unknown error")
+                results.append(f"{name}: error — {error_text}")
             else:
                 synced = sum(v for k, v in result.items() if isinstance(v, int))
                 results.append(f"{name}: synced {synced} records")
+        except Exception as e:
+            results.append(f"{name}: error — {e}")
+
+    return "Fitness sync results:\n" + "\n".join(f"  • {r}" for r in results)
+
+
+async def trigger_sync_with_backfill(whoop_backfill_days: int | None = None) -> str:
+    """Trigger sync and optionally force Whoop historical backfill window."""
+    results = []
+
+    from app.services.fitness.whoop_sync import sync_whoop
+    from app.services.fitness.peloton_sync import sync_peloton
+    from app.services.fitness.tonal_sync import sync_tonal
+
+    runners = [
+        ("Whoop", lambda: sync_whoop(backfill_days=whoop_backfill_days)),
+        ("Peloton", sync_peloton),
+        ("Tonal", sync_tonal),
+    ]
+
+    for name, fn in runners:
+        try:
+            result = await fn()
+            status = result.get("status", "ok")
+            if status == "skipped":
+                results.append(f"{name}: skipped ({result.get('reason', '')})")
+            elif status == "error":
+                error_text = "; ".join(result.get("errors", [])) if isinstance(result.get("errors"), list) else result.get("error", "unknown error")
+                results.append(f"{name}: error — {error_text}")
+            else:
+                synced = sum(v for k, v in result.items() if isinstance(v, int))
+                extra = f" (backfill {whoop_backfill_days}d)" if name == "Whoop" and whoop_backfill_days else ""
+                results.append(f"{name}: synced {synced} records{extra}")
         except Exception as e:
             results.append(f"{name}: error — {e}")
 
@@ -108,6 +144,7 @@ async def trigger_sync() -> str:
 
 async def _get_recent_workouts(days: int, platform: str = "") -> list[dict]:
     async with async_session() as session:
+        limit = max(50, min(2000, int(days) * 4))
         where = "WHERE start_time > NOW() - INTERVAL ':days days'"
         params: dict = {}
         if platform:
@@ -124,15 +161,16 @@ async def _get_recent_workouts(days: int, platform: str = "") -> list[dict]:
                 WHERE start_time > NOW() - make_interval(days => CAST(:days AS INTEGER))
                 {"AND platform = :platform" if platform else ""}
                 ORDER BY start_time DESC
-                LIMIT 50
+                LIMIT :limit
             """),
-            {"days": days, **params},
+            {"days": days, "limit": limit, **params},
         )
         return [dict(r) for r in result.mappings()]
 
 
 async def _get_recent_recovery(days: int) -> list[dict]:
     async with async_session() as session:
+        limit = max(50, min(2000, int(days) * 2))
         result = await session.execute(
             text("""
                 SELECT platform, record_date, recovery_score, resting_heart_rate,
@@ -140,15 +178,16 @@ async def _get_recent_recovery(days: int) -> list[dict]:
                 FROM fitness_recovery
                 WHERE record_date > CURRENT_DATE - make_interval(days => CAST(:days AS INTEGER))
                 ORDER BY record_date DESC
-                LIMIT 50
+                LIMIT :limit
             """),
-            {"days": days},
+            {"days": days, "limit": limit},
         )
         return [dict(r) for r in result.mappings()]
 
 
 async def _get_recent_sleep(days: int) -> list[dict]:
     async with async_session() as session:
+        limit = max(30, min(2000, int(days) * 2))
         result = await session.execute(
             text("""
                 SELECT platform, start_time, total_duration_seconds,
@@ -158,15 +197,16 @@ async def _get_recent_sleep(days: int) -> list[dict]:
                 WHERE start_time > NOW() - make_interval(days => CAST(:days AS INTEGER))
                 AND is_nap = FALSE
                 ORDER BY start_time DESC
-                LIMIT 30
+                LIMIT :limit
             """),
-            {"days": days},
+            {"days": days, "limit": limit},
         )
         return [dict(r) for r in result.mappings()]
 
 
 async def _get_recent_strength(days: int) -> list[dict]:
     async with async_session() as session:
+        limit = max(50, min(4000, int(days) * 6))
         result = await session.execute(
             text("""
                 SELECT platform, workout_title, workout_type, start_time,
@@ -175,9 +215,9 @@ async def _get_recent_strength(days: int) -> list[dict]:
                 FROM fitness_strength
                 WHERE start_time > NOW() - make_interval(days => CAST(:days AS INTEGER))
                 ORDER BY start_time DESC
-                LIMIT 50
+                LIMIT :limit
             """),
-            {"days": days},
+            {"days": days, "limit": limit},
         )
         return [dict(r) for r in result.mappings()]
 

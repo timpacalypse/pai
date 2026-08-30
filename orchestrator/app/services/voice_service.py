@@ -23,6 +23,9 @@ from typing import Optional
 
 logger = logging.getLogger("pai.voice")
 
+# Stable UUID used to store/retrieve dashboard voice exchanges in episodic memory.
+VOICE_DASHBOARD_SESSION_ID = "00000000-0000-0000-0000-000000000001"
+
 # JARVIS-style persona for all voice responses
 _VOICE_SYSTEM_PROMPT = (
     "You are AEGIS, a sophisticated personal AI assistant modeled after JARVIS from Iron Man. "
@@ -160,6 +163,7 @@ async def generate_voice_response(
     text: str,
     user_name: str = "Tim",
     http_client=None,
+    redis_client=None,
 ) -> str:
     """Route transcribed text through the shared chat pipeline with parallel RAG + classification."""
     import asyncio
@@ -168,6 +172,12 @@ async def generate_voice_response(
     from app.services.role_service import resolve_roles
     from app.memory.semantic import search_semantic
     from app.services.ollama_service import generate
+
+    # Fast-path: voice-triggered Pomodoro control for dashboard timer.
+    from app.services.pomodoro_service import handle_pomodoro_command
+    pomodoro_result = await handle_pomodoro_command(text, redis_client=redis_client)
+    if pomodoro_result and pomodoro_result.get("handled"):
+        return pomodoro_result.get("content", "Pomodoro updated.")
 
     # Parallel: classify intent + prefetch RAG context
     classification, rag_results = await asyncio.gather(
@@ -208,6 +218,19 @@ async def generate_voice_response(
     if rag_results:
         rag_context = "\n\nRelevant context:\n" + "\n".join(
             f"- {r['content'][:200]}" for r in rag_results if r.get("similarity", 0) > 0.4
+        )
+
+    # Route complex conversational queries to Claude if available
+    from app.services.claude_service import should_use_claude, generate as claude_generate
+    claude_tier, _score = await should_use_claude(skill_id, text, http_client=http_client)
+    if claude_tier:
+        # Voice path skips confirmation for now — voice can't easily prompt
+        return await claude_generate(
+            prompt=text + rag_context,
+            system_prompt=_VOICE_SYSTEM_PROMPT,
+            model_tier=claude_tier,
+            max_tokens=300,  # voice responses should be concise
+            http_client=http_client,
         )
 
     return await generate(
@@ -343,6 +366,7 @@ async def process_voice_turn(
     audio_bytes: bytes | None = None,
     text_input: str | None = None,
     http_client=None,
+    redis_client=None,
     telegram_forward: bool = False,
 ) -> dict:
     """Complete voice interaction turn: STT → skill routing → TTS → state broadcast.
@@ -373,7 +397,7 @@ async def process_voice_turn(
 
     # 2. Think
     await set_state(VoiceState.THINKING)
-    response_text = await generate_voice_response(transcript, http_client=http_client)
+    response_text = await generate_voice_response(transcript, http_client=http_client, redis_client=redis_client)
 
     # 3. Speak
     await set_state(VoiceState.RESPONDING)
@@ -383,6 +407,20 @@ async def process_voice_turn(
     # 4. Optionally forward to Telegram
     if telegram_forward:
         await _forward_to_telegram(transcript, response_text)
+
+    # Persist the last voice exchange for dashboard "Last Exchange" panel.
+    try:
+        from app.memory.episodic import log_chat_turn
+        await log_chat_turn(
+            conversation_id=VOICE_DASHBOARD_SESSION_ID,
+            role="polymath_in_training",
+            user_message=transcript,
+            assistant_message=response_text,
+            domain="personal",
+            duration_ms=0,
+        )
+    except Exception as e:
+        logger.warning("voice_turn_log_failed", extra={"error": str(e)})
 
     # 5. Return to sleeping
     await asyncio.sleep(0.8)

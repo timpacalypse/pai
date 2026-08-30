@@ -147,12 +147,27 @@ async def classify_chat_intent(
         return {"action": "execute", "skill": "idea_factory", "role": "polymath_in_training", "domain": "personal"}
 
     # ── Planner / goals / priorities ──
-    if re.search(r'\b(monthly\s*goal|weekly\s*goal|daily\s*(top|priorit)|today\s*priorit|complete\s*priorit|done\s*ship|weekly\s*review|monthly\s*review|show\s*planner|recommend\s*priorit)\b', lower):
+    if re.search(r'\b(mark\s+complete|mark\s+done|check\s*off|complete|done)\s+p[1-3]\b', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(done|complete|mark\s+done|check\s*off)\b', lower) and re.search(r'\b(priority|priorities|goal|goals|planner|weekly|monthly|daily)\b', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(today|tomorrow)\b', lower) and re.search(r'\b(task|tasks|todo|to-?do|goal|goals|priority|priorities)\b', lower) and re.search(r'[:\-]', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(task\s*(for\s*)?today|today\s*task|set\s*(a\s*)?task\s*(for\s*)?today)\b', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(goal\s*(for\s*)?today|today\s*goal|set\s*(a\s*)?(goal|priority)\s*(for\s*)?today)\b', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(set|add|create)\b', lower) and re.search(r'\b(goal|priority)\b', lower):
+        return {"action": "execute", "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(planner|goal|goals|priority|priorities|task|tasks|todo|to-?do)\b', lower) and re.search(r'\b(today|tomorrow|weekly|monthly|review|top\s*3)\b', lower):
+        action = "execute" if re.search(r'\b(add|set|create|complete|done|mark|update|replace)\b', lower) else "query"
+        return {"action": action, "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
+    if re.search(r'\b(monthly\s*goal|weekly\s*goal|daily\s*(top|priorit)|today\s*priorit|complete\s*priorit(y|ies)?|done\s*ship|weekly\s*review|monthly\s*review|show\s*planner|recommend\s*priorit)\b', lower):
         action = "execute" if re.search(r'\b(add|set|complete|done|mark)\b', lower) else "query"
-        return {"action": action, "skill": "planner", "role": "cybersecurity_executive", "domain": "professional"}
+        return {"action": action, "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
     if re.search(r'\b(planner|my\s*(goals?|priorities|top\s*3))\b', lower) and not re.search(r'\b(meal|workout|fitness)\b', lower):
         action = "execute" if re.search(r'\b(add|set|create|complete|done)\b', lower) else "query"
-        return {"action": action, "skill": "planner", "role": "cybersecurity_executive", "domain": "professional"}
+        return {"action": action, "skill": "planner", "role": "polymath_in_training", "domain": "personal"}
 
     # ── Calendar ──
     if re.search(r'\b(calendar|agenda|appointment|meeting)\b', lower):
@@ -184,8 +199,8 @@ async def classify_chat_intent(
         return {"action": "query", "skill": "weather", "role": "polymath_in_training", "domain": "personal"}
 
     # ── Music / Sonos (before anything with "play") ──
-    if re.search(r'\b(play|pause|resume|skip|next\s*song|previous\s*song|volume|sonos|spotify|now\s*playing|what.?s\s*playing)\b', lower):
-        action = "query" if re.search(r'\b(what.?s\s*playing|status|now\s*playing)\b', lower) else "execute"
+    if re.search(r'\b(play|pause|resume|skip|next\s*song|previous\s*song|volume|sonos|spotify|now\s*playing|what.?s\s*playing|what\s+is\s+playing)\b', lower):
+        action = "query" if re.search(r'\b(what.?s\s*playing|what\s+is\s+playing|status|now\s*playing)\b', lower) else "execute"
         return {"action": action, "skill": "music", "role": "polymath_in_training", "domain": "personal"}
     if re.search(r'\b(music|playlist)\b', lower) and not re.search(r'\b(workout\s*playlist|fitness\s*playlist)\b', lower):
         return {"action": "execute", "skill": "music", "role": "polymath_in_training", "domain": "personal"}
@@ -227,14 +242,20 @@ async def classify_chat_intent(
     if re.search(r'\b(grocery|groceries|shopping\s*list|what\s*(do\s*i\s*need|to\s*buy)|store\s*list)\b', lower):
         return {"action": "query", "skill": "grocery", "role": "family_chef", "domain": "family"}
 
+    # ── Recipe inventory/list/count (must come before general recipes) ──
+    if re.search(r'\b(how\s*many|count|total|number\s*of|list|show|my\s*saved|saved)\b', lower) and re.search(r'\brecipes?\b', lower):
+        return {"action": "query", "skill": "recipes", "role": "family_chef", "domain": "family"}
+
     # ── Meal rating/feedback ──
+    if re.search(r'\b(favorite|favourite|best|top|most\s*loved|most\s*liked)\b', lower) and re.search(r'\b(meal|meals|dinner|dish|recipe|food|foods)\b', lower):
+        return {"action": "query", "skill": "meal_feedback", "role": "family_chef", "domain": "family"}
     if re.search(r'\b(rate|rating|rated|stars?|out\s*of\s*5|was\s*(terrible|great|amazing|awful|delicious))\b', lower) and re.search(r'\b(meal|dinner|lunch|breakfast|food|dish|recipe)\b', lower):
         return {"action": "execute", "skill": "meal_feedback", "role": "family_chef", "domain": "family"}
     if re.search(r'\b(meal\s*ratings?|show\s*ratings?|past\s*ratings?)\b', lower):
         return {"action": "query", "skill": "meal_feedback", "role": "family_chef", "domain": "family"}
 
     # ── Recipes ──
-    if re.search(r'\b(recipe|how\s*do\s*i\s*(cook|make)|ingredient(s)?|step(s)?\s*to\s*(cook|make)|cooking\s*instructions?)\b', lower):
+    if re.search(r'\b(recipes?|how\s*do\s*i\s*(cook|make)|ingredient(s)?|step(s)?\s*to\s*(cook|make)|cooking\s*instructions?)\b', lower):
         action = "execute" if re.search(r'\b(save|add|store|create|generate)\b', lower) else "query"
         return {"action": action, "skill": "recipes", "role": "family_chef", "domain": "family"}
 
@@ -254,7 +275,7 @@ async def classify_chat_intent(
         return {"action": action, "skill": "home", "role": "polymath_in_training", "domain": "personal"}
 
     # ── Medical / health records ──
-    if re.search(r'\b(medical|doctor|medication|prescription|health\s*record|blood\s*pressure|lab\s*result|vaccination|health\s*history)\b', lower):
+    if re.search(r'\b(medical|doctor|medication|medications|medicine|meds|rx|prescription|health\s*record|blood\s*pressure|lab\s*results?|blood\s*labs?|my\s*labs?\b|vaccination|immunization|allerg(y|ies)|health\s*history)\b', lower):
         action = "execute" if re.search(r'\b(log|add|record|save|update)\b', lower) else "query"
         return {"action": action, "skill": "medical", "role": "fitness_longevity_optimist", "domain": "personal"}
 
@@ -263,7 +284,7 @@ async def classify_chat_intent(
         return {"action": "execute", "skill": "health_check", "role": "fitness_longevity_optimist", "domain": "family"}
 
     # ── Receipts ──
-    if re.search(r'\b(receipt|expense|purchase|spent|cost)\b', lower):
+    if re.search(r'\b(receipt|receipts|expense|expenses|purchase|purchases|spent|cost|tax\s*receipt|deduction)\b', lower):
         action = "execute" if re.search(r'\b(scan|upload|add|log)\b', lower) else "query"
         return {"action": action, "skill": "receipts", "role": "polymath_in_training", "domain": "personal"}
 

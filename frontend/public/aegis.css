@@ -470,12 +470,12 @@ body {
     position: fixed;
     top: 0;
     bottom: 0;
-    width: 220px;
+    width: 374px;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 16px;
-    padding: 24px 16px;
+    gap: 27px;
+    padding: 41px 27px;
     z-index: 3;
     pointer-events: none;
 }
@@ -486,8 +486,8 @@ body {
 .dash-card {
     background: rgba(0, 12, 24, 0.72);
     border: 1px solid rgba(0, 212, 255, 0.14);
-    border-radius: 12px;
-    padding: 14px 16px;
+    border-radius: 20px;
+    padding: 24px 27px;
     backdrop-filter: blur(6px);
     pointer-events: auto;
     transition: border-color 300ms ease, background 300ms ease;
@@ -499,11 +499,11 @@ body {
 }
 
 .dash-label {
-    font-size: 0.6rem;
+    font-size: 1.02rem;
     letter-spacing: 0.22em;
     text-transform: uppercase;
     color: rgba(0, 212, 255, 0.56);
-    margin-bottom: 6px;
+    margin-bottom: 10px;
 }
 
 .state-awake .dash-label {
@@ -511,23 +511,115 @@ body {
 }
 
 .dash-value {
-    font-size: 1.3rem;
+    font-size: 2.21rem;
     font-weight: 600;
     color: var(--cool-light);
     letter-spacing: 0.04em;
 }
 
 .dash-sub {
-    font-size: 0.78rem;
+    font-size: 1.33rem;
     color: var(--muted);
     margin-top: 2px;
 }
 
+.dash-sub.model-cloud {
+    color: #a78bfa;
+    text-shadow: 0 0 6px rgba(167, 139, 250, 0.4);
+}
+
+.dash-sub.model-local {
+    color: #00d4ff;
+    text-shadow: 0 0 4px rgba(0, 212, 255, 0.3);
+}
+
+.dash-btn {
+    margin-top: 10px;
+    width: 100%;
+    border: 1px solid rgba(0, 212, 255, 0.26);
+    border-radius: 9px;
+    background: rgba(0, 24, 42, 0.72);
+    color: var(--cool-light);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.dash-btn:active {
+    transform: translateY(1px);
+}
+
+.dash-btn-subtle {
+    border-color: rgba(150, 180, 210, 0.24);
+    color: rgba(190, 220, 245, 0.88);
+    background: rgba(20, 30, 46, 0.7);
+}
+
+.pomodoro-card {
+    display: none;
+}
+
+.pomodoro-card.active {
+    display: block;
+}
+
+.pomodoro-time {
+    font-family: "IBM Plex Mono", "Consolas", monospace;
+    font-size: 1.6rem;
+    letter-spacing: 0.1em;
+}
+
+.pomodoro-controls {
+    margin-top: 10px;
+}
+
+.pomodoro-label {
+    display: block;
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(0, 212, 255, 0.56);
+    margin-bottom: 5px;
+}
+
+.pomodoro-input {
+    width: 100%;
+    border: 1px solid rgba(0, 212, 255, 0.24);
+    border-radius: 8px;
+    background: rgba(0, 15, 30, 0.74);
+    color: var(--cool-light);
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 7px 8px;
+    outline: none;
+}
+
+.pomodoro-actions {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.pomodoro-actions .dash-btn {
+    margin-top: 0;
+}
+
+.pomodoro-help {
+    margin-top: 8px;
+    font-size: 0.66rem;
+    line-height: 1.45;
+    color: rgba(170, 210, 240, 0.78);
+}
+
 .dash-transcript {
-    font-size: 0.78rem;
+    font-size: 1.33rem;
     color: var(--muted);
     line-height: 1.5;
-    max-height: 90px;
+    white-space: pre-line;
+    max-height: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -604,17 +696,26 @@ body {
     }
 
     .dash-panel {
-        width: 180px;
-        padding: 16px 10px;
-        gap: 12px;
+        width: 306px;
+        padding: 27px 17px;
+        gap: 20px;
     }
 
     .dash-value {
-        font-size: 1.1rem;
+        font-size: 1.87rem;
     }
 
     .dash-card {
-        padding: 10px 12px;
+        padding: 17px 20px;
+    }
+
+    .dash-label {
+        font-size: 0.9rem;
+    }
+
+    .dash-sub,
+    .dash-transcript {
+        font-size: 1.12rem;
     }
 }
 

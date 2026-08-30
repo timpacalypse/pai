@@ -23,7 +23,7 @@ _DOMAIN_KEYWORDS: dict[DomainType, list[str]] = {
         "meal", "recipe", "cook", "food", "dinner", "lunch", "breakfast",
         "ingredient", "kitchen", "menu",
         "medical", "doctor", "prescription", "medication", "dentist", "checkup",
-        "colonoscopy", "surgery", "diagnosis", "vaccine", "lab", "blood",
+        "colonoscopy", "surgery", "diagnosis", "vaccine", "lab result", "blood",
         "home", "house", "hvac", "appliance", "maintenance", "repair",
         "plumbing", "furnace", "water heater", "air filter", "roof",
         "serviced", "replaced", "installed", "garage", "lake anna",

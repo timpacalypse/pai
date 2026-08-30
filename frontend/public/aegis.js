@@ -11,6 +11,9 @@ const pulseLayer = document.getElementById('pulse-layer');
 const nodeLayer = document.getElementById('node-layer');
 const orbLabel = null;
 const wakeBtn = document.getElementById('wake-btn');
+const pomodoroCard = document.getElementById('card-pomodoro');
+const pomodoroTimeEl = document.getElementById('pomodoro-time');
+const pomodoroStatusEl = document.getElementById('pomodoro-status');
 
 const ORCHESTRATOR_HTTP = `${location.protocol}//${location.hostname}:8000`;
 const ORCHESTRATOR_WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:8000`;
@@ -42,6 +45,20 @@ let currentState = 'sleeping';
 let pulseTimeout = null;
 let lastFrameTime = performance.now();
 let statePollInterval = null;
+let dashPollInterval = null;
+let dashBurstTimeout = null;
+
+const DASH_IDLE_REFRESH_MS = 15000;
+const DASH_BURST_REFRESH_MS = 2500;
+const DASH_BURST_DURATION_MS = 25000;
+
+let pomodoroTimerId = null;
+let pomodoroRemainingMs = 25 * 60 * 1000;
+let pomodoroRunning = false;
+let pomodoroEndsAtMs = null;
+let pomodoroLastStateKey = '';
+let pomodoroLastAlarmKey = '';
+let pomodoroLoopKey = '';
 
 function rand(min, max) {
     return Math.random() * (max - min) + min;
@@ -49,6 +66,151 @@ function rand(min, max) {
 
 function pick(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function fmtPomodoro(ms) {
+    const totalSec = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function setPomodoroStatus(text) {
+    if (pomodoroStatusEl) pomodoroStatusEl.textContent = text;
+}
+
+function renderPomodoro() {
+    if (pomodoroTimeEl) pomodoroTimeEl.textContent = fmtPomodoro(pomodoroRemainingMs);
+}
+
+function stopPomodoroInterval() {
+    if (pomodoroTimerId) {
+        clearInterval(pomodoroTimerId);
+        pomodoroTimerId = null;
+    }
+}
+
+function pomodoroStateKey() {
+    const endsAt = pomodoroEndsAtMs || 0;
+    const rem = Math.max(0, Math.floor(pomodoroRemainingMs / 1000));
+    return `${pomodoroRunning ? 1 : 0}:${endsAt}:${rem}`;
+}
+
+function playPomodoroAlarm() {
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const pattern = [880, 1046, 1318];
+        pattern.forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            const start = ctx.currentTime + idx * 0.22;
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.15, start + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+            osc.start(start);
+            osc.stop(start + 0.2);
+        });
+        setTimeout(() => ctx.close().catch(() => {}), 1200);
+    } catch (_) {}
+}
+
+function finishPomodoro() {
+    stopPomodoroInterval();
+    pomodoroLoopKey = '';
+    pomodoroRunning = false;
+    pomodoroEndsAtMs = null;
+    pomodoroRemainingMs = 0;
+    renderPomodoro();
+    setPomodoroStatus('Break time. Timer complete.');
+    const alarmKey = `${Date.now()}:${pomodoroStateKey()}`;
+    if (pomodoroLastAlarmKey !== alarmKey) {
+        playPomodoroAlarm();
+        pomodoroLastAlarmKey = alarmKey;
+    }
+}
+
+function syncPomodoroCountdownLoop(force = false) {
+    const nextLoopKey = `${pomodoroRunning ? 1 : 0}:${pomodoroEndsAtMs || 0}`;
+    if (!force && nextLoopKey === pomodoroLoopKey) {
+        renderPomodoro();
+        return;
+    }
+    pomodoroLoopKey = nextLoopKey;
+    stopPomodoroInterval();
+    if (!pomodoroRunning || !pomodoroEndsAtMs) {
+        renderPomodoro();
+        return;
+    }
+    pomodoroTimerId = setInterval(() => {
+        pomodoroRemainingMs = Math.max(0, pomodoroEndsAtMs - Date.now());
+        if (pomodoroRemainingMs <= 0) {
+            finishPomodoro();
+            return;
+        }
+        renderPomodoro();
+    }, 250);
+    renderPomodoro();
+}
+
+function applyPomodoroState(state) {
+    if (!state || !pomodoroCard) return;
+
+    pomodoroCard.hidden = !state.visible;
+    pomodoroCard.classList.toggle('active', !!state.visible);
+
+    const wasRunning = pomodoroRunning;
+    const prevEndsAtMs = pomodoroEndsAtMs;
+    const remainingSec = Number.parseInt(state.remaining_seconds || 0, 10) || 0;
+    pomodoroRunning = !!state.running;
+
+    const endsAtRaw = state.ends_at;
+    if (typeof endsAtRaw === 'number') {
+        pomodoroEndsAtMs = endsAtRaw * 1000;
+    } else if (typeof endsAtRaw === 'string' && /^\d+$/.test(endsAtRaw)) {
+        pomodoroEndsAtMs = Number.parseInt(endsAtRaw, 10) * 1000;
+    } else {
+        pomodoroEndsAtMs = null;
+    }
+
+    // Avoid countdown jumps: when running, derive remaining from a stable ends_at
+    // timestamp instead of repeatedly resetting from polled remaining_seconds.
+    if (pomodoroRunning && pomodoroEndsAtMs) {
+        const serverRemainingMs = Math.max(0, pomodoroEndsAtMs - Date.now());
+        const driftMs = Math.abs(serverRemainingMs - pomodoroRemainingMs);
+        if (!wasRunning || prevEndsAtMs !== pomodoroEndsAtMs || driftMs > 1200) {
+            pomodoroRemainingMs = serverRemainingMs;
+        }
+    } else {
+        pomodoroRemainingMs = Math.max(0, remainingSec * 1000);
+    }
+
+    if (pomodoroRunning) {
+        setPomodoroStatus('Focus session running...');
+    } else if (remainingSec <= 0) {
+        setPomodoroStatus('Break time. Timer complete.');
+    } else {
+        setPomodoroStatus('Ready');
+    }
+
+    const nextStateKey = pomodoroStateKey();
+    if (nextStateKey !== pomodoroLastStateKey) {
+        if (!pomodoroRunning && remainingSec <= 0 && pomodoroLastStateKey) {
+            const alarmKey = `done:${nextStateKey}`;
+            if (pomodoroLastAlarmKey !== alarmKey) {
+                playPomodoroAlarm();
+                pomodoroLastAlarmKey = alarmKey;
+            }
+        }
+        pomodoroLastStateKey = nextStateKey;
+    }
+
+    syncPomodoroCountdownLoop();
 }
 
 function createStars() {
@@ -410,6 +572,11 @@ function connectVoiceWS() {
             try {
                 const data = JSON.parse(event.data);
                 applyVoiceState(data.state);
+                // Refresh planner cards aggressively during active voice flow so
+                // add/remove/complete actions appear near real-time.
+                if (data.state === 'listening' || data.state === 'thinking' || data.state === 'responding') {
+                    startDashboardBurstRefresh();
+                }
             } catch (_) {}
         };
 
@@ -447,9 +614,11 @@ formEl.addEventListener('submit', (event) => {
         // Also tell the server to wake
         fetch(`${ORCHESTRATOR_HTTP}/voice/wake`, { method: 'POST' }).catch(() => {});
         transitionToAwake();
+        startDashboardBurstRefresh();
     } else if (value === 'sleep') {
         fetch(`${ORCHESTRATOR_HTTP}/voice/sleep`, { method: 'POST' }).catch(() => {});
         transitionToSleeping();
+        startDashboardBurstRefresh();
     }
     inputEl.value = '';
 });
@@ -460,8 +629,10 @@ if (wakeBtn) {
         if (currentState === 'awake') {
             fetch(`${ORCHESTRATOR_HTTP}/voice/sleep`, { method: 'POST' }).catch(() => {});
             transitionToSleeping();
+            startDashboardBurstRefresh();
         } else {
             transitionToAwake();
+            startDashboardBurstRefresh();
             try {
                 const resp = await fetch(`${ORCHESTRATOR_HTTP}/voice/wake`, { method: 'POST' });
                 if (resp.ok) {
@@ -471,8 +642,10 @@ if (wakeBtn) {
                         audio.play().catch(() => {});
                     }
                     if (data.greeting) {
-                        const responseEl = document.getElementById('dash-response');
-                        if (responseEl) responseEl.textContent = data.greeting;
+                        const tasksEl = document.getElementById('dash-tasks');
+                        if (tasksEl && (!tasksEl.textContent || tasksEl.textContent.includes('No tasks set for today.'))) {
+                            tasksEl.textContent = 'System awake. Planner tasks loaded.';
+                        }
                     }
                 }
             } catch (_) {}
@@ -480,7 +653,7 @@ if (wakeBtn) {
     });
 }
 
-// ── Dashboard data (clock, weather, calendar, last exchange) ──
+// ── Dashboard data (clock, weather, calendar, planner) ──
 function updateClock() {
     const now = new Date();
     const clock = document.getElementById('dash-clock');
@@ -501,8 +674,9 @@ async function fetchDashData() {
         const tempEl = document.getElementById('dash-temp');
         const eventEl = document.getElementById('dash-event');
         const eventTimeEl = document.getElementById('dash-event-time');
-        const transcriptEl = document.getElementById('dash-transcript');
-        const responseEl = document.getElementById('dash-response');
+        const goalsEl = document.getElementById('dash-goals');
+        const tasksEl = document.getElementById('dash-tasks');
+        const modelEl = document.getElementById('dash-model');
 
         if (data.weather && weatherEl) {
             weatherEl.textContent = data.weather.condition || '--';
@@ -511,17 +685,84 @@ async function fetchDashData() {
         if (data.next_event && eventEl) {
             eventEl.textContent = data.next_event.title || '--';
             if (eventTimeEl) eventTimeEl.textContent = data.next_event.time || '--';
+        } else {
+            if (eventEl) eventEl.textContent = 'No upcoming events';
+            if (eventTimeEl) eventTimeEl.textContent = '--';
         }
-        if (data.last_exchange) {
-            if (transcriptEl) transcriptEl.textContent = data.last_exchange.user || 'Awaiting input...';
-            if (responseEl) responseEl.textContent = data.last_exchange.assistant || '--';
+        const planner = data.planner_today;
+        if (planner && goalsEl) {
+            const goals = Array.isArray(planner.goals) ? planner.goals : [];
+            if (goals.length) {
+                goalsEl.textContent = goals
+                    .slice(0, 3)
+                    .map((g) => `${g.completed ? 'DONE' : 'OPEN'} G${g.slot || '-'}: ${g.title || '--'}`)
+                    .join('\n');
+            } else {
+                goalsEl.textContent = 'No goals set for today.';
+            }
+        } else if (goalsEl) {
+            goalsEl.textContent = 'No goals set for today.';
+        }
+
+        if (planner && tasksEl) {
+            const tasks = Array.isArray(planner.tasks) ? planner.tasks : [];
+            if (tasks.length) {
+                tasksEl.textContent = tasks
+                    .slice(0, 3)
+                    .map((t) => `${t.completed ? 'DONE' : 'OPEN'} T${t.slot || '-'}: ${t.title || '--'}`)
+                    .join('\n');
+            } else {
+                tasksEl.textContent = 'No tasks set for today.';
+            }
+        } else if (tasksEl) {
+            tasksEl.textContent = 'No tasks set for today.';
+        }
+
+        if (modelEl) {
+            const raw = data.model || '--';
+            if (raw.startsWith('claude:')) {
+                modelEl.textContent = raw.replace('claude:', 'CLAUDE ').toUpperCase();
+                modelEl.classList.add('model-cloud');
+                modelEl.classList.remove('model-local');
+            } else {
+                // Show short local model name (strip tag after colon, e.g. "qwen2.5:14b..." → "QWEN2.5 14B")
+                const short = raw.split(':').slice(0, 2).join(' ').replace(/-instruct.*|_K_M/gi, '').toUpperCase();
+                modelEl.textContent = short || raw;
+                modelEl.classList.add('model-local');
+                modelEl.classList.remove('model-cloud');
+            }
+        }
+
+        if (data.pomodoro) {
+            applyPomodoroState(data.pomodoro);
         }
     } catch (_) {}
 }
 
-// Fetch dashboard data every 30s
+function startDashboardPolling(intervalMs = DASH_IDLE_REFRESH_MS) {
+    if (dashPollInterval) clearInterval(dashPollInterval);
+    dashPollInterval = setInterval(fetchDashData, intervalMs);
+}
+
+function startDashboardBurstRefresh() {
+    fetchDashData();
+    startDashboardPolling(DASH_BURST_REFRESH_MS);
+    if (dashBurstTimeout) clearTimeout(dashBurstTimeout);
+    dashBurstTimeout = setTimeout(() => {
+        startDashboardPolling(DASH_IDLE_REFRESH_MS);
+        dashBurstTimeout = null;
+    }, DASH_BURST_DURATION_MS);
+}
+
+// Initial load + background refresh
 fetchDashData();
-setInterval(fetchDashData, 30000);
+startDashboardPolling(DASH_IDLE_REFRESH_MS);
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') fetchDashData();
+});
+
+renderPomodoro();
 
 buildNetwork();
 setState('sleeping');

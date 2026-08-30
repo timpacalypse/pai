@@ -246,6 +246,7 @@ def _rating_to_sentiment(rating: int) -> str:
 async def get_meal_ratings(
     meal_plan_id: int | None = None,
     family_member_id: int | None = None,
+    limit: int | None = None,
 ) -> list[dict]:
     """Get meal ratings, optionally filtered."""
     conditions = []
@@ -259,6 +260,10 @@ async def get_meal_ratings(
         params["member_id"] = family_member_id
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    limit_sql = ""
+    if isinstance(limit, int) and limit > 0:
+        limit_sql = " LIMIT :limit"
+        params["limit"] = limit
 
     async with async_session() as session:
         result = await session.execute(
@@ -270,7 +275,39 @@ async def get_meal_ratings(
                 f"LEFT JOIN family_members m ON m.id = r.family_member_id "
                 f"{where} "
                 f"ORDER BY r.created_at DESC"
+                f"{limit_sql}"
             ),
             params,
+        )
+        return [dict(row) for row in result.mappings()]
+
+
+async def get_favorite_meals(limit: int = 8) -> list[dict]:
+    """Return top-rated meals from feedback and saved recipes."""
+    safe_limit = max(1, min(limit, 20))
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT item_name, source, score, votes "
+                "FROM ("
+                "  SELECT r.meal_name AS item_name, "
+                "         'meal_feedback'::text AS source, "
+                "         ROUND(AVG(r.rating)::numeric, 2) AS score, "
+                "         COUNT(*)::int AS votes "
+                "  FROM meal_ratings r "
+                "  GROUP BY r.meal_name "
+                "  UNION ALL "
+                "  SELECT LOWER(rec.title) AS item_name, "
+                "         'recipes'::text AS source, "
+                "         ROUND(rec.family_rating::numeric, 2) AS score, "
+                "         1::int AS votes "
+                "  FROM recipes rec "
+                "  WHERE rec.family_rating IS NOT NULL"
+                ") combined "
+                "WHERE score IS NOT NULL "
+                "ORDER BY score DESC, votes DESC, item_name ASC "
+                "LIMIT :limit"
+            ),
+            {"limit": safe_limit},
         )
         return [dict(row) for row in result.mappings()]

@@ -2,6 +2,7 @@ import io
 import logging
 import secrets
 import time
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -302,6 +303,22 @@ async def chat(req: ChatRequest, request: Request):
     """Conversational endpoint with dynamic skill routing via LLM classification."""
     start = time.perf_counter()
     http_client = request.app.state.http_client
+    redis_client = request.app.state.redis
+
+    # Fast-path: dashboard Pomodoro controls via voice/chat commands.
+    from app.services.pomodoro_service import handle_pomodoro_command
+    pomodoro_result = await handle_pomodoro_command(req.message, redis_client=redis_client)
+    if pomodoro_result and pomodoro_result.get("handled"):
+        roles = await resolve_roles("polymath_in_training", None)
+        return _build_chat_response(
+            req,
+            roles,
+            pomodoro_result.get("content", "Pomodoro updated."),
+            "skill:pomodoro",
+            start,
+            http_client,
+            model_used="local:skill",
+        )
 
     # ── Step 1: Classification + RAG in parallel ──
     import asyncio
@@ -333,30 +350,30 @@ async def chat(req: ChatRequest, request: Request):
             try:
                 if action == "execute" and skill.write_handler:
                     content = await skill.write_handler(req.message, http_client)
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client, model_used="local:skill")
                 elif action == "query" and skill.read_handler:
                     skill_data = await skill.read_handler(req.message, http_client)
-                    content = await _generate_with_context(
+                    content, model_used, claude_req, cx_score = await _generate_with_context(
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
                         preloaded_rag=rag_context,
                     )
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client, model_used=model_used, claude_required=claude_req, complexity_score=cx_score)
                 elif skill.read_handler:
                     skill_data = await skill.read_handler(req.message, http_client)
-                    content = await _generate_with_context(
+                    content, model_used, claude_req, cx_score = await _generate_with_context(
                         req, roles, http_client,
                         skill_context=[skill_data] if skill_data else [],
                         preloaded_rag=rag_context,
                     )
-                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client)
+                    return _build_chat_response(req, roles, content, f"skill:{skill_id}", start, http_client, model_used=model_used, claude_required=claude_req, complexity_score=cx_score)
             except Exception as e:
                 logger.warning(f"Skill {skill_id} failed: {e}")
                 # Fall through to conversation
 
     # ── Step 3: Conversation — build context and generate response ──
-    content = await _generate_with_context(req, roles, http_client, preloaded_rag=rag_context)
-    return _build_chat_response(req, roles, content, "conversation", start, http_client)
+    content, model_used, claude_req, cx_score = await _generate_with_context(req, roles, http_client, preloaded_rag=rag_context)
+    return _build_chat_response(req, roles, content, "conversation", start, http_client, model_used=model_used, claude_required=claude_req, complexity_score=cx_score)
 
 
 async def _generate_with_context(
@@ -402,15 +419,47 @@ async def _generate_with_context(
 
     model = select_model(req.message)
 
-    return await generate(
+    # Route to Claude if task benefits from stronger reasoning
+    from app.services.claude_service import should_use_claude, generate as claude_generate, compress_context
+    skill_id = getattr(req, '_routed_skill', None)
+    claude_tier, complexity_score = await should_use_claude(skill_id, req.message, http_client=http_client)
+
+    if claude_tier:
+        # Require explicit confirmation before spending credits
+        if not req.confirm_claude:
+            return (
+                f"This request scored {complexity_score}/10 complexity. "
+                f"I'd recommend using Claude ({claude_tier}) for a better response. "
+                f"Reply with confirmation to use Claude, or I'll answer with the local model.",
+                f"local:pending_claude:{claude_tier}",
+                claude_tier,
+                complexity_score,
+            )
+
+        # User confirmed — compress context and send to Claude
+        all_context = (rag_context or []) + (skill_context or [])
+        compressed = await compress_context(all_context, http_client=http_client) if all_context else ""
+        claude_prompt = req.message
+        if compressed:
+            claude_prompt += f"\n\n[Context]\n{compressed}"
+        result = await claude_generate(
+            prompt=claude_prompt,
+            system_prompt=system_prompt,
+            model_tier=claude_tier,
+            http_client=http_client,
+        )
+        return result, f"claude:{claude_tier}", None, complexity_score
+
+    result = await generate(
         prompt=user_prompt,
         system_prompt=system_prompt,
         model=model,
         http_client=http_client,
     )
+    return result, model, None, complexity_score
 
 
-def _build_chat_response(req, roles, content: str, intent: str, start: float, http_client=None) -> ChatResponse:
+def _build_chat_response(req, roles, content: str, intent: str, start: float, http_client=None, model_used: str | None = None, claude_required: str | None = None, complexity_score: int | None = None) -> ChatResponse:
     """Build a ChatResponse and log the turn to episodic memory."""
     import asyncio
     duration_ms = (time.perf_counter() - start) * 1000
@@ -430,6 +479,15 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float, ht
         if getattr(req, "user_id", None):
             from app.services.conversation_service import ensure_conversation
             await ensure_conversation(req.conversation_id, req.user_id, title=req.message[:200], http_client=http_client)
+        # Store last model used in Redis for dashboard
+        try:
+            import redis.asyncio as aioredis
+            from app.core.config import settings
+            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+            await r.set("pai:last_model_used", model_used or "local", ex=3600)
+            await r.aclose()
+        except Exception:
+            pass
     asyncio.create_task(_log())
 
     return ChatResponse(
@@ -441,11 +499,14 @@ def _build_chat_response(req, roles, content: str, intent: str, start: float, ht
         content=content,
         intent=intent,
         duration_ms=round(duration_ms, 2),
+        model_used=model_used,
+        claude_required=claude_required,
+        complexity_score=complexity_score,
     )
 
 
 @router.post("/chat/stream")
-async def chat_stream(req: ChatRequest, request: Request):
+async def chat_stream(req: ChatRequest, request: Request, force_local: int = 0):
     """Streaming SSE version of the conversational endpoint.
 
     Returns Server-Sent Events with token-by-token streaming for the final response.
@@ -456,6 +517,27 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     start = time.perf_counter()
     http_client = request.app.state.http_client
+
+    # Fast-path: dashboard Pomodoro controls via voice/chat commands.
+    from app.services.pomodoro_service import handle_pomodoro_command
+    pomodoro_result = await handle_pomodoro_command(req.message, redis_client=request.app.state.redis)
+    if pomodoro_result and pomodoro_result.get("handled"):
+        roles = await resolve_roles("polymath_in_training", None)
+
+        async def _pomodoro_stream():
+            meta = _json.dumps({
+                "role": roles.primary.role.value,
+                "domain": roles.primary.domain.value,
+                "intent": "skill:pomodoro",
+                "duration_ms": round((time.perf_counter() - start) * 1000, 2),
+            })
+            content = pomodoro_result.get("content", "Pomodoro updated.")
+            yield f"data: {_json.dumps({'type': 'meta', 'data': meta})}\n\n"
+            yield f"data: {_json.dumps({'type': 'content', 'text': content})}\n\n"
+            yield f"data: {_json.dumps({'type': 'done'})}\n\n"
+            asyncio.create_task(_log_stream_turn(req, roles, content, "skill:pomodoro", start, http_client))
+
+        return StreamingResponse(_pomodoro_stream(), media_type="text/event-stream")
 
     # ── Pre-work: run classification and RAG retrieval in parallel ──
     from app.services.llm_intent_service import classify_chat_intent
@@ -537,6 +619,69 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     model = select_model(req.message)
     intent = f"skill:{skill_id}" if skill_id and skill_id != "none" else "conversation"
+
+    # ── Claude routing with user confirmation ──
+    claude_tier = None
+    complexity_score = 0
+    if not force_local:
+        from app.services.claude_service import should_use_claude, generate as claude_generate, compress_context
+        claude_tier, complexity_score = await should_use_claude(
+            skill_id if skill_id != "none" else None, req.message, http_client=http_client
+        )
+
+    if claude_tier and not req.confirm_claude:
+        # Send a confirmation prompt instead of silently using credits
+        async def _confirm_stream():
+            meta = _json.dumps({
+                "role": roles.primary.role.value,
+                "domain": roles.primary.domain.value,
+                "intent": intent,
+                "model": model,
+                "claude_required": claude_tier,
+                "complexity_score": complexity_score,
+            })
+            yield f"data: {_json.dumps({'type': 'meta', 'data': meta})}\n\n"
+            confirm_msg = (
+                f"This request scored {complexity_score}/10 complexity. "
+                f"I'd recommend using Claude ({claude_tier}) for a better response. "
+                f"Reply with confirmation to use Claude, or I'll answer with the local model."
+            )
+            yield f"data: {_json.dumps({'type': 'content', 'text': confirm_msg})}\n\n"
+            yield f"data: {_json.dumps({'type': 'done', 'duration_ms': round((time.perf_counter() - start) * 1000, 2)})}\n\n"
+
+        return StreamingResponse(_confirm_stream(), media_type="text/event-stream")
+
+    if claude_tier and req.confirm_claude:
+        # User confirmed — use Claude (non-streaming for simplicity)
+        from app.services.claude_service import generate as claude_generate, compress_context
+        all_context = (rag_context or []) + ([skill_content] if skill_content else [])
+        compressed = await compress_context(all_context, http_client=http_client) if all_context else ""
+        claude_prompt = req.message
+        if compressed:
+            claude_prompt += f"\n\n[Context]\n{compressed}"
+
+        async def _claude_stream():
+            meta = _json.dumps({
+                "role": roles.primary.role.value,
+                "domain": roles.primary.domain.value,
+                "intent": intent,
+                "model": f"claude:{claude_tier}",
+                "complexity_score": complexity_score,
+            })
+            yield f"data: {_json.dumps({'type': 'meta', 'data': meta})}\n\n"
+
+            result = await claude_generate(
+                prompt=claude_prompt,
+                system_prompt=system_prompt,
+                model_tier=claude_tier,
+                http_client=http_client,
+            )
+            yield f"data: {_json.dumps({'type': 'content', 'text': result})}\n\n"
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            yield f"data: {_json.dumps({'type': 'done', 'duration_ms': duration_ms})}\n\n"
+            asyncio.create_task(_log_stream_turn(req, roles, result, intent, start, http_client))
+
+        return StreamingResponse(_claude_stream(), media_type="text/event-stream")
 
     async def _event_stream():
         meta = _json.dumps({
@@ -989,7 +1134,13 @@ async def medical_tell(req: MedicalTellRequest, request: Request):
         model="qwen3:4b",
         http_client=request.app.state.http_client,
     )
-    is_read = "read" in raw.strip().lower()
+    first = (raw or "").strip().lower().split()[0] if (raw or "").strip() else ""
+    if first not in {"read", "write"}:
+        import re
+        lower = req.text.lower()
+        is_read = bool(re.search(r"\b(what|which|when|show|list|history|records?|medications?|labs?|results?|allerg(y|ies)|vaccinations?)\b", lower))
+    else:
+        is_read = first == "read"
     if is_read:
         from app.services.skill_registry import get_skill
         skill = get_skill("medical")
@@ -1007,7 +1158,7 @@ async def medical_tell(req: MedicalTellRequest, request: Request):
 
 
 @router.post("/skills/medical/record")
-async def add_medical_record(req: MedicalRecordRequest):
+async def add_medical_record(req: MedicalRecordRequest, request: Request):
     """Add a structured medical record directly."""
     from app.services.medical_service import add_medical_record as add_record
     record = await add_record(
@@ -1019,6 +1170,7 @@ async def add_medical_record(req: MedicalRecordRequest):
         details=req.details,
         follow_up=req.follow_up,
         medications=req.medications,
+        http_client=request.app.state.http_client,
     )
     return record
 
@@ -1096,7 +1248,7 @@ async def upload_medical_file(record_id: int, request: Request):
 
 
 @router.post("/skills/recipes")
-async def save_recipe(req: RecipeRequest):
+async def save_recipe(req: RecipeRequest, request: Request):
     """Save or update a recipe."""
     from app.services.recipe_service import save_recipe as do_save
     return await do_save(
@@ -1111,6 +1263,7 @@ async def save_recipe(req: RecipeRequest):
         servings=req.servings,
         tags=req.tags,
         notes=req.notes,
+        http_client=request.app.state.http_client,
     )
 
 
@@ -1168,7 +1321,7 @@ async def paste_recipe(request: Request):
     text = body.get("text", "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="No recipe text provided")
-    result = await ingest_recipe_text(text)
+    result = await ingest_recipe_text(text, http_client=request.app.state.http_client)
     if result.get("error"):
         raise HTTPException(status_code=422, detail=result["error"])
     return result
@@ -1688,10 +1841,10 @@ async def fitness_strength(days: int = 30):
 
 
 @router.post("/fitness/sync")
-async def fitness_sync():
+async def fitness_sync(whoop_backfill_days: int | None = None):
     """Manually trigger a sync of all configured fitness platforms."""
-    from app.services.fitness.fitness_query import trigger_sync
-    return {"result": await trigger_sync()}
+    from app.services.fitness.fitness_query import trigger_sync_with_backfill
+    return {"result": await trigger_sync_with_backfill(whoop_backfill_days=whoop_backfill_days)}
 
 
 @router.get("/fitness/sync/status")
@@ -1708,6 +1861,13 @@ WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"
 WHOOP_SCOPES = "offline read:workout read:recovery read:sleep read:cycles read:profile read:body_measurement"
 
 
+def _whoop_redirect_uri(request: Request) -> str:
+    configured = (settings.whoop_redirect_uri or "").strip()
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/") + "/whoop/callback"
+
+
 @router.get("/whoop/auth")
 async def whoop_auth_start(request: Request):
     """Start Whoop OAuth2 flow. Visit this URL in your browser."""
@@ -1718,15 +1878,15 @@ async def whoop_auth_start(request: Request):
     redis = request.app.state.redis
     await redis.set("pai:whoop_oauth_state", state, ex=600)
 
-    redirect_uri = str(request.base_url).rstrip("/") + "/whoop/callback"
-    params = (
-        f"?response_type=code"
-        f"&client_id={settings.whoop_client_id}"
-        f"&redirect_uri={redirect_uri}"
-        f"&scope={WHOOP_SCOPES.replace(' ', '%20')}"
-        f"&state={state}"
-    )
-    auth_url = WHOOP_AUTH_URL + params
+    redirect_uri = _whoop_redirect_uri(request)
+    params = urlencode({
+        "response_type": "code",
+        "client_id": settings.whoop_client_id,
+        "redirect_uri": redirect_uri,
+        "scope": WHOOP_SCOPES,
+        "state": state,
+    })
+    auth_url = f"{WHOOP_AUTH_URL}?{params}"
     return RedirectResponse(auth_url)
 
 
@@ -1745,7 +1905,7 @@ async def whoop_auth_callback(request: Request, code: str = "", state: str = "",
     if not code:
         return HTMLResponse("<h2>No authorization code received</h2>", status_code=400)
 
-    redirect_uri = str(request.base_url).rstrip("/") + "/whoop/callback"
+    redirect_uri = _whoop_redirect_uri(request)
 
     import httpx
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -1972,8 +2132,9 @@ async def voice_ws(websocket: WebSocket):
 
 @router.get("/dashboard/summary")
 async def dashboard_summary(request: Request):
-    """Lightweight summary for the dashboard panels (weather, calendar, last exchange)."""
+    """Lightweight summary for the dashboard panels (weather, calendar, planner)."""
     import asyncio
+    from app.core.config import settings
     http_client = request.app.state.http_client
 
     async def _fetch_weather():
@@ -1991,36 +2152,132 @@ async def dashboard_summary(request: Request):
 
     async def _fetch_event():
         try:
-            from app.services.calendar_service import get_events
-            events = await get_events(upcoming_days=3)
-            if events:
-                ev = events[0]
-                time_str = ev.get("event_time", "")
-                date_str = str(ev.get("event_date", ""))
-                display_time = f"{date_str} {time_str}".strip() if time_str else date_str
-                return {"title": ev.get("title", "--"), "time": display_time}
+            # Use merged agenda (local + Google Calendar) so dashboard is never
+            # blank when events only exist in the Google source.
+            from app.services.calendar_service import get_agenda
+            # Look a bit farther ahead so the dashboard card is less likely to
+            # appear empty when there are no events in the next couple days.
+            agenda = await get_agenda(days=14)
+            by_date = agenda.get("agenda", {}) if isinstance(agenda, dict) else {}
+            if by_date:
+                dates = sorted(by_date.keys())
+                for date_key in dates:
+                    day_events = by_date.get(date_key) or []
+                    if not day_events:
+                        continue
+                    day_events = sorted(day_events, key=lambda e: str(e.get("event_time") or ""))
+                    ev = day_events[0]
+                    time_str = ev.get("event_time", "")
+                    display_time = f"{date_key} {time_str}".strip() if time_str else date_key
+                    return {"title": ev.get("title", "--"), "time": display_time}
+
+            # If there are no upcoming events, surface Google Calendar auth
+            # state so the dashboard does not look broken.
+            try:
+                from app.services.google_calendar_service import is_configured, is_authorized
+                configured, authorized = await asyncio.gather(
+                    is_configured(),
+                    is_authorized(),
+                )
+                if not configured:
+                    return {
+                        "title": "Calendar setup required",
+                        "time": "Add credentials or local events",
+                    }
+                if not authorized:
+                    return {
+                        "title": "Google Calendar not connected",
+                        "time": "Open /skills/calendar/google/auth",
+                    }
+            except Exception:
+                pass
         except Exception:
             pass
         return None
 
-    async def _fetch_exchange():
+    async def _fetch_planner_today():
         try:
-            from app.memory.episodic import get_chat_history
-            turns = await get_chat_history("voice", limit=1)
-            if turns and len(turns) >= 2:
-                return {
-                    "user": (turns[0].get("content") or "")[:120],
-                    "assistant": (turns[1].get("content") or "")[:200],
-                }
+            from datetime import date
+            from app.services.planner_service import get_current_plan, suggest_daily_priorities, get_daily_goals, get_daily_priorities
+            plan, suggestions = await asyncio.gather(
+                get_current_plan(),
+                suggest_daily_priorities(limit=3),
+            )
+            goals, tasks = await asyncio.gather(
+                get_daily_goals(date.today()),
+                get_daily_priorities(date.today()),
+            )
+            daily = plan.get("daily", []) if isinstance(plan, dict) else []
+            recs = suggestions.get("recommendations", []) if isinstance(suggestions, dict) else []
+            return {
+                "daily": [
+                    {
+                        "slot": d.get("slot"),
+                        "title": d.get("title", ""),
+                        "completed": bool(d.get("completed", False)),
+                    }
+                    for d in daily
+                ],
+                "goals": [
+                    {
+                        "slot": g.get("slot"),
+                        "title": g.get("title", ""),
+                        "completed": bool(g.get("completed", False)),
+                    }
+                    for g in goals
+                ],
+                "tasks": [
+                    {
+                        "slot": t.get("slot"),
+                        "title": t.get("title", ""),
+                        "completed": bool(t.get("completed", False)),
+                    }
+                    for t in tasks
+                ],
+                "recommendations": [
+                    {
+                        "text": r.get("text", ""),
+                        "source": r.get("source", ""),
+                    }
+                    for r in recs
+                ],
+                "weekly_open": suggestions.get("weekly_open", 0) if isinstance(suggestions, dict) else 0,
+                "monthly_open": suggestions.get("monthly_open", 0) if isinstance(suggestions, dict) else 0,
+            }
         except Exception:
             pass
         return None
 
-    weather, next_event, last_exchange = await asyncio.gather(
-        _fetch_weather(), _fetch_event(), _fetch_exchange()
+    async def _fetch_pomodoro():
+        try:
+            from app.services.pomodoro_service import get_pomodoro_state
+            return await get_pomodoro_state(redis_client=request.app.state.redis)
+        except Exception:
+            return None
+
+    weather, next_event, planner_today, pomodoro = await asyncio.gather(
+        _fetch_weather(), _fetch_event(), _fetch_planner_today(), _fetch_pomodoro()
     )
 
-    return {"weather": weather, "next_event": next_event, "last_exchange": last_exchange}
+    # Get active model info
+    model_label = settings.ollama_default_model
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        last_model = await r.get("pai:last_model_used")
+        await r.aclose()
+        if last_model:
+            model_label = last_model
+    except Exception:
+        pass
+
+    return {
+        "weather": weather,
+        "next_event": next_event,
+        "planner_today": planner_today,
+        "pomodoro": pomodoro,
+        "model": model_label,
+    }
 
 
 @router.get("/voice/state")
@@ -2028,6 +2285,15 @@ async def voice_state():
     """Get the current AEGIS voice session state."""
     from app.services.voice_service import get_state_dict
     return get_state_dict()
+
+
+@router.get("/claude/stats")
+async def claude_stats():
+    """Get today's Claude usage stats (spend, tokens, budget, mode)."""
+    from app.services.claude_service import get_usage_stats, _is_cli_mode, _is_api_mode
+    stats = await get_usage_stats()
+    stats["mode"] = "cli" if _is_cli_mode() else "api" if _is_api_mode() else "disabled"
+    return stats
 
 
 @router.post("/voice/transcribe")
@@ -2063,7 +2329,9 @@ async def voice_respond(request: Request):
         raise HTTPException(400, "Missing 'text' field")
     await set_state(VoiceState.THINKING)
     response_text = await generate_voice_response(
-        text, http_client=request.app.state.http_client
+        text,
+        http_client=request.app.state.http_client,
+        redis_client=request.app.state.redis,
     )
     if telegram:
         await _forward_to_telegram(text, response_text)
@@ -2104,6 +2372,7 @@ async def voice_turn(request: Request):
         audio_bytes=audio_bytes,
         text_input=text_input,
         http_client=request.app.state.http_client,
+        redis_client=request.app.state.redis,
         telegram_forward=telegram,
     )
 

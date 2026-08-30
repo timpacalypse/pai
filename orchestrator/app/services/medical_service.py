@@ -7,9 +7,60 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.core.database import async_session
+from app.memory.semantic import store_semantic
 from app.services.ollama_service import generate
 
 logger = logging.getLogger("pai.services.medical")
+
+
+async def _get_member_name(member_id: int) -> str:
+    async with async_session() as session:
+        result = await session.execute(
+            text("SELECT name FROM family_members WHERE id = :id LIMIT 1"),
+            {"id": member_id},
+        )
+        return result.scalar() or f"member_{member_id}"
+
+
+def _build_medical_semantic_text(record: dict, member_name: str) -> str:
+    meds = record.get("medications") or []
+    vitals = record.get("vitals") or {}
+    lines = [
+        f"Medical record for {member_name}",
+        f"Date: {record.get('record_date', '')}",
+        f"Category: {record.get('category', 'other')}",
+    ]
+    if record.get("provider"):
+        lines.append(f"Provider: {record['provider']}")
+    if record.get("summary"):
+        lines.append(f"Summary: {record['summary']}")
+    if record.get("details"):
+        lines.append(f"Details: {record['details']}")
+    if record.get("follow_up"):
+        lines.append(f"Follow-up: {record['follow_up']}")
+    if meds:
+        lines.append("Medications: " + ", ".join(str(m) for m in meds))
+    if vitals:
+        lines.append("Vitals: " + json.dumps(vitals))
+    return "\n".join(lines)
+
+
+async def _index_medical_record_semantic(record: dict, http_client=None) -> None:
+    member_name = await _get_member_name(int(record.get("family_member_id", 0)))
+    source = f"medical:record:{record.get('id')}"
+    content = _build_medical_semantic_text(record, member_name)
+    await store_semantic(
+        content=content,
+        source=source,
+        metadata={
+            "type": "medical_record",
+            "record_id": record.get("id"),
+            "family_member_id": record.get("family_member_id"),
+            "family_member_name": member_name,
+            "category": record.get("category", "other"),
+        },
+        http_client=http_client,
+    )
 
 
 MEDICAL_INTAKE_PROMPT = """\
@@ -76,6 +127,7 @@ async def process_medical_input(user_text: str, http_client=None) -> dict:
         follow_up=parsed.get("follow_up", ""),
         medications=parsed.get("medications", []),
         vitals=parsed.get("vitals", {}),
+        http_client=http_client,
     )
 
     return {
@@ -150,6 +202,7 @@ async def add_medical_record(
     follow_up: str = "",
     medications: list[str] | None = None,
     vitals: dict | None = None,
+    http_client=None,
 ) -> dict:
     """Insert a medical record."""
     record_date = None
@@ -187,7 +240,14 @@ async def add_medical_record(
         row = result.mappings().fetchone()
         await session.commit()
         logger.info("medical_record_added", extra={"member_id": family_member_id, "category": category})
-        return dict(row)
+        record = dict(row)
+
+    try:
+        await _index_medical_record_semantic(record, http_client=http_client)
+    except Exception as e:
+        logger.warning("medical_semantic_index_failed", extra={"member_id": family_member_id, "error": str(e)})
+
+    return record
 
 
 async def get_medical_records(

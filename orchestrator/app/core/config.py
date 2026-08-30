@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pai:pai_dev_secret@postgres:5432/pai"
     redis_url: str = "redis://redis:6379/0"
-    ollama_url: str = "http://192.168.0.58:11434"
-    ollama_default_model: str = "qwen2.5:14b-instruct-q4_K_M"
+    ollama_url: str = "http://192.168.0.5:8082/ollama"
+    ollama_default_model: str = "qwen3.5:9b"
     orchestrator_env: str = "development"
     orchestrator_log_level: str = "info"
 
@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # Sonos / Music (runs on Synology NAS)
     sonos_api_url: str = "http://192.168.0.5:5005"
 
+    # Claude (Anthropic) — enable CLI for Pro/Max subscription, or set API key
+    claude_cli_enabled: bool = False       # use `claude -p` CLI (Pro/Max plan)
+    anthropic_api_key: str = ""            # direct API (pay-per-token)
+    anthropic_base_url: str = "http://192.168.0.5:8082/anthropic"  # LLM proxy
+    claude_daily_budget_usd: float = 1.0   # API mode budget cap
+    claude_default_tier: str = "sonnet"    # haiku | sonnet | opus
+
     # Google Calendar
     google_credentials_path: str = "/app/credentials/google_credentials.json"
     google_token_path: str = "/app/credentials/google_token.json"
@@ -47,6 +54,8 @@ class Settings(BaseSettings):
     whoop_client_secret: str = ""
     whoop_access_token: str = ""
     whoop_refresh_token: str = ""
+    whoop_redirect_uri: str = ""
+    whoop_backfill_days: int = 400
 
     # Peloton (username/password auth)
     peloton_username: str = ""

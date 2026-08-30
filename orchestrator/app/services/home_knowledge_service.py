@@ -97,23 +97,43 @@ async def process_natural_input(user_text: str, http_client=None) -> dict:
                 priority = task_data.get("priority", "normal")
                 notes = task_data.get("notes", "")
 
-                task = await upsert_home_task(
-                    home_item_id=item["id"],
-                    description=desc,
-                    recurrence_days=recurrence,
-                    priority=priority,
-                    notes=notes,
-                )
-                result["task"] = task
-                result["actions"].append(f"Created task: {desc}")
-
-                if recurrence > 0:
-                    result["actions"].append(f"Recurring every {recurrence} days")
-
                 if just_completed:
-                    log = await complete_task(task["id"], notes="Initial completion via natural input")
-                    result["completion"] = log
-                    result["actions"].append(f"Marked as just completed — next due: {task.get('next_due_at', 'N/A')}")
+                    # Find and complete the existing task for this item
+                    completed = await _complete_existing_task(
+                        item["id"], desc, recurrence_days=recurrence, notes=notes
+                    )
+                    if completed:
+                        result["completion"] = completed
+                        result["actions"].append(
+                            f"Completed: {completed['description']} — next due: {completed.get('next_due_at', 'N/A')}"
+                        )
+                    else:
+                        # No existing task — create one as completed
+                        task = await upsert_home_task(
+                            home_item_id=item["id"],
+                            description=desc,
+                            recurrence_days=recurrence,
+                            priority=priority,
+                            notes=notes,
+                        )
+                        log = await complete_task(task["id"], notes="Completed via natural input")
+                        result["task"] = task
+                        result["completion"] = log
+                        result["actions"].append(f"Created and completed task: {desc}")
+                        if log.get("next_due_at"):
+                            result["actions"].append(f"Next due: {log['next_due_at']}")
+                else:
+                    task = await upsert_home_task(
+                        home_item_id=item["id"],
+                        description=desc,
+                        recurrence_days=recurrence,
+                        priority=priority,
+                        notes=notes,
+                    )
+                    result["task"] = task
+                    result["actions"].append(f"Task updated: {desc}")
+                    if recurrence > 0:
+                        result["actions"].append(f"Recurring every {recurrence} days")
 
         # Handle document storage
         elif intent == "document":
@@ -131,6 +151,63 @@ async def process_natural_input(user_text: str, http_client=None) -> dict:
                 result["actions"].append(f"Stored document: {doc_title}")
 
     return result
+
+
+async def _complete_existing_task(
+    home_item_id: int,
+    description: str,
+    recurrence_days: int = 0,
+    notes: str = "",
+) -> dict | None:
+    """Find an existing task for this item and mark it complete.
+
+    Searches for tasks matching the description (fuzzy), preferring overdue ones.
+    If recurrence_days is provided and differs, updates the task's recurrence.
+    Returns the completion result or None if no matching task found.
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT t.id, t.description, t.recurrence_days, t.next_due_at "
+                "FROM home_tasks t "
+                "WHERE t.home_item_id = :item_id "
+                "ORDER BY CASE WHEN t.next_due_at < NOW() THEN 0 ELSE 1 END, "
+                "  t.next_due_at ASC NULLS LAST"
+            ),
+            {"item_id": home_item_id},
+        )
+        rows = result.mappings().fetchall()
+
+    if not rows:
+        return None
+
+    # Find best match by description
+    desc_lower = description.strip().lower()
+    matched = None
+    for row in rows:
+        existing_desc = (row["description"] or "").lower()
+        if existing_desc == desc_lower or desc_lower in existing_desc or existing_desc in desc_lower:
+            matched = dict(row)
+            break
+
+    # If no description match, just use the first (most overdue) task for this item
+    if not matched:
+        matched = dict(rows[0])
+
+    task_id = matched["id"]
+
+    # Update recurrence if user specified a new one
+    if recurrence_days > 0 and recurrence_days != matched.get("recurrence_days", 0):
+        async with async_session() as session:
+            await session.execute(
+                text("UPDATE home_tasks SET recurrence_days = :rec, updated_at = NOW() WHERE id = :id"),
+                {"rec": recurrence_days, "id": task_id},
+            )
+            await session.commit()
+
+    # Complete the task (this resets next_due_at based on recurrence)
+    completion = await complete_task(task_id, notes=notes or "Completed via voice/chat")
+    return completion
 
 
 def _parse_json(raw: str) -> dict:
@@ -165,37 +242,16 @@ async def upsert_home_item(
     purchase_date: str | None = None,
     notes: str = "",
 ) -> dict:
-    """Add or update a home item by name."""
+    """Add or update a home item by name (case-insensitive match)."""
     async with async_session() as session:
-        result = await session.execute(
-            text(
-                "INSERT INTO home_items (name, category, location, brand, model_info, purchase_date, notes) "
-                "VALUES (:name, :category, :location, :brand, :model_info, :purchase_date, :notes) "
-                "ON CONFLICT DO NOTHING "
-                "RETURNING id, name, category, location, brand, model_info, purchase_date, notes, created_at"
-            ),
-            {
-                "name": name.strip(),
-                "category": category,
-                "location": location,
-                "brand": brand,
-                "model_info": model_info,
-                "purchase_date": purchase_date,
-                "notes": notes,
-            },
-        )
-        row = result.mappings().fetchone()
-        if row:
-            await session.commit()
-            return dict(row)
-
-        # Item exists — fetch it, optionally update non-empty fields
+        # Always check for existing item first (case-insensitive)
         existing = await session.execute(
             text("SELECT id, name, category, location, brand, model_info, purchase_date, notes, created_at "
-                 "FROM home_items WHERE name = :name"),
+                 "FROM home_items WHERE LOWER(name) = LOWER(:name) ORDER BY id LIMIT 1"),
             {"name": name.strip()},
         )
         existing_row = existing.mappings().fetchone()
+
         if existing_row:
             item = dict(existing_row)
             updates = {}
@@ -219,8 +275,26 @@ async def upsert_home_item(
                 item.update(updates)
             return item
 
+        # No existing item — insert
+        result = await session.execute(
+            text(
+                "INSERT INTO home_items (name, category, location, brand, model_info, purchase_date, notes) "
+                "VALUES (:name, :category, :location, :brand, :model_info, :purchase_date, :notes) "
+                "RETURNING id, name, category, location, brand, model_info, purchase_date, notes, created_at"
+            ),
+            {
+                "name": name.strip(),
+                "category": category,
+                "location": location,
+                "brand": brand,
+                "model_info": model_info,
+                "purchase_date": purchase_date,
+                "notes": notes,
+            },
+        )
+        row = result.mappings().fetchone()
         await session.commit()
-        return {"name": name, "error": "unexpected state"}
+        return dict(row)
 
 
 async def get_home_items(category: str | None = None) -> list[dict]:
@@ -263,13 +337,62 @@ async def upsert_home_task(
     notes: str = "",
     alert_days_before: int = 7,
 ) -> dict:
-    """Create a maintenance task for a home item."""
+    """Create or update a maintenance task for a home item.
+
+    If a task with a similar description already exists for this item, update it
+    instead of creating a duplicate.
+    """
     now = datetime.now(timezone.utc)
     next_due = None
     if recurrence_days > 0:
         next_due = now + timedelta(days=recurrence_days)
 
     async with async_session() as session:
+        # Check for existing task with same item + similar description
+        existing = await session.execute(
+            text(
+                "SELECT id, description, recurrence_days, next_due_at, priority "
+                "FROM home_tasks WHERE home_item_id = :item_id "
+                "ORDER BY next_due_at ASC NULLS LAST"
+            ),
+            {"item_id": home_item_id},
+        )
+        rows = existing.mappings().fetchall()
+
+        # Find a matching task by fuzzy description match
+        desc_lower = description.strip().lower()
+        matched = None
+        for row in rows:
+            existing_desc = (row["description"] or "").lower()
+            # Match if descriptions share key words or one contains the other
+            if existing_desc == desc_lower or desc_lower in existing_desc or existing_desc in desc_lower:
+                matched = dict(row)
+                break
+
+        if matched:
+            # Update existing task
+            updates = {}
+            if recurrence_days > 0 and recurrence_days != matched.get("recurrence_days", 0):
+                updates["recurrence_days"] = recurrence_days
+                updates["next_due_at"] = next_due
+            if priority != "normal" and priority != matched.get("priority"):
+                updates["priority"] = priority
+            if notes:
+                updates["notes"] = notes
+
+            if updates:
+                set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+                updates["id"] = matched["id"]
+                await session.execute(
+                    text(f"UPDATE home_tasks SET {set_clause}, updated_at = NOW() WHERE id = :id"),
+                    updates,
+                )
+                await session.commit()
+                matched.update(updates)
+
+            return matched
+
+        # No existing task found — create new
         result = await session.execute(
             text(
                 "INSERT INTO home_tasks "

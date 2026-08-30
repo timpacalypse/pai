@@ -1,0 +1,55 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Router: Interface Traffic (Download)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(ifHCInOctets{ifDescr=~\".*\"}[5m]) * 8", "legendFormat": "{{ifDescr}} in" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bps" } }
+    },
+    {
+      "title": "Router: Interface Traffic (Upload)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(ifHCOutOctets{ifDescr=~\".*\"}[5m]) * 8", "legendFormat": "{{ifDescr}} out" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bps" } }
+    },
+    {
+      "title": "Router: Interface Status",
+      "type": "table",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ifOperStatus", "legendFormat": "{{ifDescr}}", "format": "table", "instant": true }
+      ]
+    },
+    {
+      "title": "Router: Interface Errors",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(ifInErrors[5m])", "legendFormat": "{{ifDescr}} in errors" },
+        { "expr": "rate(ifOutErrors[5m])", "legendFormat": "{{ifDescr}} out errors" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["pai", "network", "homelab"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "title": "Router",
+  "uid": "pai-network-overview"
+}

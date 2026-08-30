@@ -11,6 +11,39 @@ from app.core.config import settings
 logger = logging.getLogger("pai.services.gmail")
 
 
+async def send_system_alert(subject: str, body: str) -> bool:
+    """Send a plain system alert email via Gmail SMTP."""
+    if not settings.gmail_address or not settings.gmail_app_password:
+        logger.warning("gmail_not_configured_for_system_alert", extra={"subject": subject})
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"PAI Orchestrator <{settings.gmail_address}>"
+        msg["To"] = settings.gmail_recipient or settings.gmail_address
+
+        text_body = body.strip()
+        html_body = (
+            "<html><body style=\"font-family:Segoe UI,Arial,sans-serif;\">"
+            f"<pre style=\"white-space:pre-wrap;\">{text_body}</pre>"
+            "</body></html>"
+        )
+
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(settings.gmail_address, settings.gmail_app_password)
+            server.send_message(msg)
+
+        logger.info("system_alert_sent", extra={"subject": subject, "to": msg["To"]})
+        return True
+    except Exception as e:
+        logger.error("system_alert_send_failed", extra={"subject": subject, "error": str(e)})
+        return False
+
+
 async def send_research_digest(
     articles: list[dict],
     topic: str,
